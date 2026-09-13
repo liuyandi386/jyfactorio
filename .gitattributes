@@ -1,0 +1,25 @@
+# 默认：自动识别文本文件并统一为 LF 存储，避免 Windows/Linux 协作时整文件差异
+* text=auto
+
+# Windows 脚本保留 CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# 二进制文件不做行尾转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.bmp   binary
+*.ttf   binary
+*.ttc   binary
+*.otf   binary
+*.dll   binary
+*.lib   binary
+*.exe   binary
+*.rar   binary
+*.zip   binary
+
+# 第三方目录不计入 GitHub 语言统计
+factory-td/deps/**  linguist-vendored

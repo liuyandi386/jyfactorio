@@ -1,0 +1,17 @@
+# 构建目录
+build/
+out/
+cmake-build-*/
+
+# 存档与运行时数据
+saves/
+assets/../*.sav
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# vcpkg
+vcpkg_installed/

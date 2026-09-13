@@ -1,0 +1,412 @@
+# AI 交接文档（游戏全部知识）
+
+> 写于 2026-08-25，最近更新 2026-09-13（**Alpha v1.3.2 已发布**，见 §0）。本文档是"换一个 AI 继续开发"的完整交接材料：
+> 项目是什么、做到哪了、怎么做的、坑在哪、还有什么没做。
+> 阅读顺序建议：**0 最近一轮交接** → 1 项目现状 → 3 构建 → 4 架构 → 5 机制 → 8 配置 → 9 存档 → 11 坑 → 12 未完成。
+
+---
+
+## 0. ★ 最近一轮工作交接（2026-09-13，Alpha v1.3.2 已发布）
+
+> 本节回答两个问题：**我干了啥 / 接下来要干啥**。先看结论：
+> **新增"游戏内暂停面板"（ESC）：继续游戏 / 保存存档 / 设置 / 返回主界面；设置项定义已抽到 `gset` 供启动菜单与暂停面板共用（两处行为一致由代码结构保证）。编译通过（`[100%] Built target factory-td`）、存档自检 21/21、启动冒烟 12s 存活；文档已同步（`update.md` 写入 v1.3.2、`README.md` 补暂停面板、本文 §0 已更新）。唯一遗留仍是「人工实机视觉走查」（暂停面板观感、返回主界面流程），需用户睁眼确认。**
+
+### 0.1 干了啥：新增"游戏内暂停面板 + 设置项共用化"（v1.3.2）
+
+- **`ui/GameUI.h/.cpp`** 新增暂停面板（ESC 打开）：
+  - 全屏变暗 + 居中纵向按钮列：**继续游戏 / 保存存档 / 设置 / 返回主界面**（`drawPausePanel` / `drawPauseMenu`）。
+  - 键盘 ↑↓ 选择、Enter 确认、Esc 继续游戏；鼠标可点、可悬停高亮（`MouseMoved` 才接管焦点，指针停住不夺焦——沿用上一轮教训，见 0.3）。
+  - 打开即 `g_->paused = true` 冻结世界，并 `closePanels()` + `hideRecipePopup()` + 清 `faceEditTarget`，防止面板叠层。
+  - **保存存档** = `g_->saveGame()`（Toast 反馈，面板不关）；**返回主界面** = 先自动保存 → `g_->returnToMenu = true`。
+  - **「设置」子页与启动菜单完全一致**：直接调用 `gset::settingRowLabel/Value/IsAction` + `cycleSettingRow` + `activateSettingRow`。
+  - 新增 `consumeDisplayApply()`：暂停面板改了显示模式时，由 `Game` 在**事件循环之外**重建窗口。
+  - 新增 `anyPanelOpen()`：供 ESC 判断"先关面板"还是"开暂停面板"。
+- **`Settings.h/.cpp`（`gset`）抽出共享设置项定义**：`SETTING_ROW_COUNT`、`settingRowLabel()`、`settingRowValue()`、`settingRowIsAction()`、`cycleSettingRow()`（返回是否需重建窗口）、`activateSettingRow()`（返回 `SettingActivate{None,Changed,DisplayChanged,Back}`）。`EntrySystem::drawSettings()` / `cycleSettingRow()` / `activateSettingRow()` 已改为调用它们（视觉与行为不变）。
+- **`Game.h/.cpp`**：新增 `bool returnToMenu`、`void applyDisplayMode()`；`run()` 循环条件改为 `window.isOpen() && !returnToMenu`，并在 `processEvents()` 之后消费 `ui->consumeDisplayApply()`（重建窗口后同步摄像机尺寸/视图/UI 布局并保持暂停）。
+- **`main.cpp`** 改为循环：`while(true){ EntrySystem →(Quit? 退出)→ Game →(returnToMenu? 回菜单 : 关窗退出) }`。
+- **`systems/PlayerSystem.cpp`**：ESC 语义 = 有面板/面编辑器先关（MC 习惯），否则 `ui->openPausePanel()`。
+- **版本号**：`EntrySystem.cpp` 的 `kVersion` → `v1.3.2  ALPHA BUILD`；`GameConfig.h` 的 `SCREEN_TITLE` 加 ` v1.3.2`。
+
+### 0.1b 上一版（v1.3.1，已完成）：启动入口系统 + 跨场景设置
+
+`ui/EntrySystem.*`：启动动画 → 标题主菜单 → 设置 → 加载预览（真实进度 + 敌人路径/矿点迷你地图），自带独立窗口、结束即销毁；`Settings.h/.cpp`（落盘 `saves/settings.json`）与 `main.cpp` 先 `gset::load()`、`--selftest-save` 保留在入口系统之前。详见 `update.md` 的 Alpha v1.3.1 章节。
+
+### 0.2 验证到什么程度
+
+- ✅ **编译**：`cmake --build` 得到 `[100%] Built target factory-td`（LTO 的 `ar.exe: plugin needed to handle lto object` 是已知噪音，见 §3.2）。
+- ✅ **存档自检**：`factory-td.exe --selftest-save`（在 `build/` 下运行）→ **21/21 通过**（见 §3.4）。
+- ✅ **启动冒烟**：在 `build/` 下后台运行 exe 12 秒未退出（正常）。
+- ⚠ **人工视觉走查仍未做（唯一遗留，见 0.4-1）**：本 AI 只做了编译/自检/冒烟，无法替代人眼确认暂停面板观感、游戏内改显示模式是否即时重建、返回主界面是否正确回到标题菜单。
+
+### 0.3 上一轮的关键坑（已修，勿再犯）
+
+1. **鼠标悬停每帧夺取键盘焦点**：`EntrySystem` 的悬停命中写成 `if (r.contains(mp)) { settingHover = i; settingRow = i; }` → 指针停住时键盘焦点每帧被弹回该行，↑↓/←→ 形同失效。修法：**只有鼠标真正移动时**才让悬停行接管焦点（记录上一帧鼠标位置做比较），指针停住仅更新高亮；进入设置界面时先同步 `lastMousePos`，避免停住的指针立刻夺焦。**暂停面板的悬停沿用了同一套做法。**
+2. **独占全屏黑屏闪烁 + 鼠标漂移**：全屏改用 `sf::Style::None` + 桌面尺寸 + 贴 (0,0) 的"无边框全屏"，**不调用 `SetDisplayMode`**；并用 `SetWindowPos(HWND_TOPMOST)` 防任务栏遮挡。
+3. **不能在 `pollEvent` 事件循环内重建 SFML 窗口**：显示模式变更一律延后到事件循环之外（`EntrySystem::pendingDisplayApply` / `Game::run` 里的 `ui->consumeDisplayApply()` + `applyDisplayMode()`）。
+
+### 0.4 接下来要干啥（建议顺序）
+
+1. **人工实机走查（唯一遗留，需用户）**：
+   - 游戏内按 ESC → 暂停面板出现、世界冻结；↑↓/Enter/Esc 与鼠标点击/悬停正常。
+   - 面板「设置」→ 改显示模式（三种，含 1600×900 与无边框全屏）确认**即时重建窗口且不崩**；改悬停提示 / 摄像机速度 / 新手引导后返回游戏确认生效。
+   - 「保存存档」有 Toast；「返回主界面」先保存再回到标题菜单，此时「继续游戏」应能读回刚才进度。
+   - 顺带复测 v1.3.1 遗留：主菜单「↓↓ → Enter 进设置 → →」显示模式循环、鼠标不动时焦点不被夺走、无边框全屏是否铺满 / 任务栏是否被盖住。
+   - 注意本机 DPI 150%，自动化坐标需 ÷1.5（§3.5）。
+2. **可选（先问用户）**：暂停面板是否还要"退出游戏"或"重新开始"？目前只到主菜单。
+3. ~~文档同步~~ → **已完成**（`update.md` v1.3.2、`README.md`、本文 §0）。
+
+---
+
+## 1. 项目现状总览
+
+- **项目**：Factorio 风格 2D 工厂塔防游戏，C++20 + SFML 2.6 + EnTT 3.13 + nlohmann/json 重构版。
+- **位置**：`D:\JYGAME\jyfactorio\factory-td\`（C++ 主工程）。同目录还有：
+  - `python版（老版）\` —— Python/pygame 原始版本（只作对照，不再开发）
+  - `update.md` —— 更新日志（C++ 部分最新 **Alpha v1.3.2**，含各版本功能与修复说明）
+  - `README.md` —— 总 README（C++ 在前、Python 在后）
+  - `add.txt` —— **用户需求原文（最高优先级需求来源）**
+  - `TODO.md` —— 早期遗留 TODO
+  - `factory-td\PORTING.md` —— Python→C++ 移植对照表
+- **当前状态**：add.txt 的 ①~⑬ 项需求**全部实现**，编译通过、运行正常；存档系统经过全面修复并有自检验证（21/21 通过）。
+- **当前版本**：**Alpha v1.3.2**（2026-09-13）——新增**游戏内暂停面板（ESC）**；上一版 v1.3.1 为**启动入口系统 + 跨场景用户设置**。
+- **v1.3.2 状态**：新增**游戏内暂停面板**（继续游戏 / 保存存档 / 设置 / 返回主界面，`ui/GameUI.*`）与**设置项共用化**（`gset::settingRow*` / `cycleSettingRow` / `activateSettingRow`，启动菜单与暂停面板共用同一份）。**代码完成、编译通过、存档自检 21/21、启动冒烟通过；文档已同步；唯一遗留是人工实机视觉走查（详见 §0）。**
+- ⚠ **文档同步坑（已修复，勿重犯）**：曾出现根目录 `update.md` / `ai.md` 停在 v1.2.1，而开发记录只写进了 `build/update.md` 副本，落后两个版本。**改代码后同步更新根目录 `README.md` / `update.md` / `ai.md`；`build/` 是构建产物目录，不是文档源。**
+- **开发方式**：每改一批代码必须 `cmake --build` 编译验证 + 启动冒烟测试；用户会实际游玩并截图报 bug，报 bug 时先"解析为什么"再修。
+
+---
+
+## 2. 目录结构与文件职责（factory-td/）
+
+```
+factory-td/
+├── CMakeLists.txt        # 三级依赖探测：系统装 → 本地deps → FetchContent联网
+├── build.bat             # 一键构建（自动找小熊猫g++/lerobot cmake/Clash代理）
+├── PORTING.md            # Python→C++ 移植对照表
+├── assets/
+│   ├── config.json       # ★ 全部可调数值（改数值无需重编译，见 §8）
+│   ├── fonts/simsun.ttc  # ★ 打包中文字体（18MB，优先于系统字体加载）
+│   └── sprites/          # PNG 贴图（塔8向/机器4向/桶/敌人/矿石3种）
+├── deps/local2/          # 离线依赖：SFML 2.6.1 mingw预编译 + EnTT 3.13.2 头文件
+│                         #   + nlohmann/json.hpp（单头）
+├── build/                # 构建输出（factory-td.exe + 复制的 assets + saves/）
+└── src/
+    ├── main.cpp          # 入口；支持 --selftest-save 存档往返自检（§3.4）
+    ├── GameConfig.h      # ★ 全部数值内置默认值（中文注释，[JSON可调] 标注哪些可被config.json覆盖）
+    ├── Settings.h/.cpp   # ★ 跨场景用户设置（显示模式/悬停提示/新手引导/摄像机速度）→ saves/settings.json
+    │                     #   + 设置项共用定义 settingRow*/cycleSettingRow/activateSettingRow（见 §0）
+    ├── Game.h/.cpp       # 主控：窗口/网格/地形/矿点/建筑放置拆除/波次/存档接口/update()编排/悬浮提示
+    │                     #   + returnToMenu（暂停面板返回主界面）/ applyDisplayMode（事件循环外重建窗口）
+    ├── Camera.h/.cpp     # 摄像机（WASD/滚轮缩放0.5~2.0/平滑插值/坐标变换）
+    ├── AssetManager.h/.cpp # 贴图+字体加载缓存；程序化生成（地形/熔炉/合金炉/电容/发电机/矿机L2L3虚空/5新矿石）
+    ├── ConfigLoader.h/.cpp # config.json 加载器（"存在才覆盖"，缺字段用内置默认值）
+    ├── SaveSystem.h/.cpp # JSON 存档（saves/factory_td.json）
+    ├── ui/GameUI.h/.cpp  # 暗色工业风HUD：资源栏/建筑按钮/方向悬浮窗/面编辑器/配方菜单/
+    │                     #   说明书·新手引导(H/F1、6标签页)/商店(B)/随身工作台(V)/ME终端面板/
+    │                     #   小地图/世界地图(M)/Toast/悬停提示/暂停面板(ESC：继续·存档·设置·返回主界面)
+    ├── ui/EntrySystem.h/.cpp # ★ 启动入口：启动动画/标题主菜单/设置/加载预览（自带独立窗口，见 §0）
+    ├── systems/          # ECS 系统（见 §4）
+    │   ├── PlayerSystem.h/.cpp   # 输入：键盘热键/左键放置/右键交互/摄像机/预览
+    │   ├── MachineSystem.h/.cpp  # 采矿机/熔炉/合金炉/组装机生产计时 + 输出推送(机器→桶/管道/分流器/机器/ME)
+    │   ├── PowerSystem.h/.cpp    # 电网：发电机燃烧、BFS路由、电容充放、供电判定（EU/秒）
+    │   ├── PipeSystem.h/.cpp     # 物品管道：即时路由BFS、分流器、机器拉取原料、连接掩码
+    │   ├── MeSystem.h/.cpp       # AE2式ME网络：网络重建/入网吸入/出网导出（后期物流）
+    │   ├── TurretSystem.h/.cpp   # 炮塔索敌射击+子弹
+    │   ├── EnemySystem.h/.cpp    # 敌人移动/波次/击杀结算/生成（Z/X/C分键）
+    │   ├── ItemSystem.h/.cpp     # 物品键名表/中文名/颜色（JSON存档与配置共用）
+    │   └── RenderSystem.h/.cpp   # 世界渲染（分13层：地形/矿点/建筑精灵/管道/电线/塔/…）
+    ├── components/       # 组件头文件
+    │   ├── Building.h    # 类型/网格坐标/占地/朝向（所有建筑都有）
+    │   ├── Machine.h     # 机器：kind/等级/速率/累加器/任务状态/配方id
+    │   ├── Inventory.h   # 在 Item.h 里！通用库存（槽×堆叠）
+    │   ├── Item.h        # ItemType 枚举 + Inventory + ITEM_INFOS 引用
+    │   ├── Pipe.h        # 管道：connMask + buffer(deque) + transferTimer
+    │   ├── Me.h          # ME接口/ME存储单元/ME终端：connMask + networkId
+    │   ├── Storage.h     # Bucket / SplitterQueue / OreDeposit(有限储量)
+    │   ├── Power.h       # PowerGeneratorNode / PowerCapacitor / PowerConsumer / PowerPole
+    │   ├── Turret.h      # 炮塔：射程伤害射速/弹药/电力/炮管朝向
+    │   ├── Enemy.h       # 敌人：类型/血量/速度/路径索引/目标
+    │   ├── Bullet.h      # 子弹
+    │   ├── FaceConfig.h  # 格雷科技式四面配置(NONE/INPUT/TRANSFER/OUTPUT)
+    │   └── Position.h    # GridPos 等
+    └── utils/
+        ├── SpatialGrid.h # 炮塔索敌空间哈希
+        ├── Pathfinder.h  # 路径铺格(buildPathTiles)
+        └── Profiler.h    # Tracy 打点封装（FT_PROFILE；无Tracy时为空）
+```
+
+---
+
+## 3. 构建 / 运行 / 自检
+
+### 3.1 工具链（本机已验证）
+- **编译器**：小熊猫C++ 自带 MinGW GCC 11.5 → `C:\Program Files\RedPanda-Cpp\mingw64\bin`（加到 PATH）
+- **cmake**：`D:\miniconda\envs\lerobot\Scripts\cmake.exe`（4.3.4）
+- **make**：mingw32-make（随 mingw64 的 PATH）
+
+### 3.2 构建命令（在 factory-td/ 目录执行）
+```powershell
+$env:Path = "C:\Program Files\RedPanda-Cpp\mingw64\bin;" + $env:Path
+& "D:\miniconda\envs\lerobot\Scripts\cmake.exe" --build build -j 8
+```
+- 成功标志：输出 `[100%] Built target factory-td`。
+- ⚠ **LTO 警告噪音**：stderr 会出现 `ar.exe: plugin needed to handle lto object` + `lto-wrapper` 警告，PowerShell 因此报 `[exit code: 1]`。**只要看到 "Built target" 就是成功**，别被 exit code 骗。
+- 构建后会自动把 `assets/` 复制进 `build/assets/`（post-build 步骤）。
+- 全新配置：`cmake -B build -S . -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release`（或直接跑 build.bat）。
+
+### 3.3 运行
+- 以 `build\` 为工作目录运行 `build\factory-td.exe`（**必须**，游戏用相对路径读 `assets/config.json` 和写 `saves/`）。
+- 冒烟测试惯例：`Start-Process` 后台起 10~15 秒未退出=正常，然后 `Stop-Process -Force` 杀掉。
+- ⚠ 偶发"10秒内正常退出 code=0"：多为启动探测误报，重跑一次确认；游戏本身无自动退出逻辑。
+
+### 3.4 存档自检（改存档代码后必跑）
+```
+build\factory-td.exe --selftest-save
+```
+- 自动布置 13 种建筑+各类状态 → saveGame → 清空世界 → loadGame → 21 项核对（库存/任务/管道缓冲/面配置/塔/分流器/发电机/ME网络/矿点/金币/生命/摄像机/敌人）。
+- 自动备份/恢复玩家真实存档（`factory_td.json.selftest_bak`）。
+- 退出码 0=全部通过。
+
+### 3.5 依赖
+- 离线依赖已齐：`deps/local2/` 有 SFML 预编译包、`deps/local2/entt/src`（EnTT 3.13.2 头文件）、`deps/local2/nlohmann/json.hpp`。**离线可构建**。
+- ⚠ 沙箱/网络坑（本开发环境）：hosts 把 github 解析到 127.0.0.1；需要联网时代理 `127.0.0.1:7897`（Clash Verge）；Python（OpenSSL）能走代理，schannel TLS 被沙箱拦；沙箱禁写名为 `CMakeLists.txt` 的文件、点开头文件、`entt-3.13.2` 目录——曾用 danger-full-access 提权绕过（用户批准过）。
+- DPI：用户屏幕 2560×1440 @150%；若做 GUI 自动化，进程 DPI 不感知，坐标要 ÷1.5。
+
+---
+
+## 4. 架构（ECS）
+
+### 4.1 核心数据
+- `Game`（Game.h）：一切公开。`entt::registry reg`、`Grid grid`（200×200，`GridCell{building}`）、`terrain[]`（0草地/1路径）、`enemyWaypoints`、`camera`、`assets`、`ui`、`power`（PowerState）、`gold/lives/playerInv`、`hasSelection/selected`、`hasFreePlace/freePlaceType`（商店兑换机器的免费放置）、`faceEditTarget`、波次状态、`keys[4]`。
+- **网格占用**：`grid.at(x,y).building` = 该格建筑实体（2×2 发电机在 4 格都登记）。**矿点不是建筑**：矿点是 `GridPos + OreDeposit` 实体，不占网格、不阻塞放置。
+- EnTT 3.13 注意：`view` **没有** `size()/empty()`（用 `std::distance` 或迭代器比较）；`view<T>().each()` 单组件解包是 2 元组（entity+comp），结构化绑定数量必须对上。
+
+### 4.2 Game::update 顺序（Game.cpp，改动时保持该顺序）
+```
+1 PlayerSystem::updateCamera           // WASD 摄像机
+2 MINER_FREE_POWER 时给矿机通电
+3 MachineSystem::updateMachines        // 采矿/冶炼/合金/组装 计时生产
+4 PowerSystem::updateGenerators + update  // 发电机燃烧 + 电网BFS路由 + 供电判定
+5 MeSystem::update                     // ME网络（脏则重建 + 吸入/导出）
+  PipeSystem::updateSplitters          // 分流器智能轮询均分
+  PipeSystem::updatePipes              // 管道BFS即时路由
+  PipeSystem::updateMachinePulls       // 机器从邻管道/分流器/ME接口拉原料；发电机拉煤
+6 MachineSystem::pushOutputs           // 机器/桶 输出推送（桶/管道/分流器/相邻机器/ME设备）
+7 EnemySystem::update                  // 敌人沿路径移动
+8 TurretSystem::updateTowers + updateBullets
+9 EnemySystem::processKills            // 击杀→金币
+10 EnemySystem::updateWaves
+11 updateHoverTooltip + PlayerSystem::updatePreview + ui->update
+```
+
+### 4.3 系统/组件一览
+| 系统 | 组件 |
+|---|---|
+| Player | （操作 Game 状态） |
+| Machine | Machine + Inventory + FaceConfig（+PowerConsumer 合金炉） |
+| Power | PowerGeneratorNode / PowerCapacitor / PowerConsumer / PowerPole / FaceConfig / Turret(电力塔) |
+| Pipe | Pipe（缓冲/掩码/计时器）、SplitterQueue、Me* |
+| Me | MeInterface/MeDrive/MeTerminal（网络存储是 MeSystem 内 static vector<MeNetwork>） |
+| Turret | Turret / Bullet / Inventory(弹药塔) |
+| Enemy | Enemy |
+| Render | 全部（按层绘制） |
+
+---
+
+## 5. 玩法机制详解（当前实现）
+
+### 5.1 物品（20 种，ItemType 枚举顺序=存档键名顺序）
+矿石8：iron_ore/copper_ore/coal/gold_ore/diamond_ore/nickel_ore/silver_ore/lead_ore
+锭6：iron_ingot/copper_ingot/gold_ingot/nickel_ingot/silver_ingot/lead_ingot
+其他：circuit_board/ammo
+合金4：steel_ingot/electrum_ingot/invar_ingot/constantan_ingot
+（键名表在 `systems/ItemSystem.cpp` 的 ITEM_KEYS，与枚举严格同序——加物品时两处都要改 + GameConfig.h ITEM_INFOS）
+
+### 5.2 采矿（add.txt ③④）
+- 8 种矿石独立矿点随机散布全图（种子42，避开路径、互不重叠）；**有限储量**每点 1000，采尽矿点消失。
+- **采矿场 1/2/3 级**（BuildingType Miner/MinerL2/MinerL3）：Chebyshev 范围内（5×5/9×9/13×13）采集**所有类型**矿石，每秒 4/16/256 个（`m.acc += rate*dt`，按矿点储量递减）。
+- **虚空采矿场**（MinerVoid）：无矿点，8 矿石轮转产出共 4096/秒。
+- 采矿机**不再要求脚下有矿点**（预览已删该检查）；测试期免供电（MINER_FREE_POWER=true）；右键旋转输出面。
+- ⚠ 虚空采矿场 4096/s 会远超管道/机器吞吐——设计上应接储物桶直连或 ME 网络，否则背压停摆（用户已知，属设计）。
+
+### 5.3 冶炼/合金/组装（add.txt ⑥⑨⑩）
+- **数据驱动配方表**（GameConfig.h 中 `std::vector<Recipe>`，全部可由 config.json 覆盖/增删）：
+  - `FURNACE_RECIPES`：6 矿石→锭（2~3 秒）
+  - `ALLOY_RECIPES`（合金炉，**v1.2.4 起不再需要电力**，需右键选定配方）：钢=2铁锭+2煤；琥珀金=1金锭+1银锭→2；因瓦=2铁锭+1镍锭→3；康铜=1铜锭+1镍锭→2（参考 GT/Mek/Thermal）
+  - `ASSEMBLER_RECIPES`：弹药=2铁锭+1铜锭；电路板=1铁锭+1铜锭（右键切换配方）
+  - `CRAFTING_RECIPES`（随身工作台，V 键，点击即合成）
+- 熔炉：**配方轮询**（均衡烧各矿种，不再只烧第一种）；合金炉/组装机：**右键选定配方**（`recipeId`），之后只按该配方生产。产出流程：`Machine.hasJob/recipeId/jobTime/jobTotal`。
+- 组装机/合金炉每种原料有**缓存上限 128**（`ASSEMBLER_ITEM_CAP` / `ALLOY_FURNACE_ITEM_CAP`，管道配送/机器拉料/ME出网三条入库路径统一限流），防止单种原料囤满挤死另一种（如煤囤满堵死铁锭）。
+- 熔炉出炉时若库存已满，会移除过剩原料腾位（避免锭被静默丢弃）。
+- 机器放置方向=输出面（其余三面 INPUT，GT 式面配置可右键编辑）。
+
+### 5.4 电网（add.txt ⑤；EU/秒）
+- 燃煤发电机 32EU/s（煤燃5s）；旧版发电机（2×2）1煤→3000EU/3s；电容库 50000EU 容量、64EU/s 充放；电线杆 150px 恒导通；电力塔 8EU/s；采矿机 MINER_POWER_NEED=10（测试期免供）。**合金炉自 v1.2.4 起不耗电**（已从 PowerConsumer 移除，相关断电检查/红点渲染已删）。
+- 电力线缆四面向面配置（NONE/INPUT/TRANSFER/OUTPUT），BFS 定向路由。
+- **无损耗、无过载——用户明确"就是这样设计的，不用改"**。
+
+### 5.5 物流（两段式：前期管道 / 后期 ME 网络）★用户核心诉求
+**前期——物品管道**（EnderIO/Pipez 式，add.txt ⑦）：
+- 1×1 方块，**自动链接四邻**的管道/分流器/容器/机器（**没有面配置九宫格**），放置拆除时 `PipeSystem::updateNeighbors` 重算 connMask。
+- **无动画、瞬时传送（AE2 式即时路由，用户最终确认保持此方案）**：每 0.25s 每管道对其缓冲做 BFS（版本戳 visited，零分配），找到**最近的可接收端点**直接送达；找不到就停在源管道（背压，上限16）。
+- **路由接收端（acceptsItem/deliverItem）**：储物桶（容量内）、弹药塔（只收弹药）、机器（只收其配方所需原料；合金炉断电不收）、发电机（只收煤）、**任意 ME 设备**（网络有容量即收）。
+- 机器还会**主动从四邻管道/分流器/ME接口拉原料**（`PipeSystem::wantedInputs` 按配方表算需求，去重），无关物品不污染机器库存。
+- 吞吐：机器→管道 1件/帧；路由每 0.25s 每管道 4 件（PIPES_PULL_PER_TICK）；分流器 0.15s 轮询。
+- **悬停显示**：管道网络全局缓存（BFS 四邻统计"网络缓存: N 件（共 M 格）+ 本格 x/16"）——用户选择的显示方案。
+- **分流器**：自动链接四邻；队列物品"轮询+跳过满出口"均分给管道/桶/塔；BFS 路由可穿过它；机器/桶可直接把物品塞进它。
+
+**后期——ME 网络**（AE2 式"所有物品进网络"，用户明确要两段式）：
+- 三种方块：**ME接口**（桥接：从邻管道/分流器吸入入网；向邻机器/发电机/塔/桶导出出网；**右键锁定输出过滤白名单**，存档 `filter` 字段）、**ME存储单元**（每块 +20000 容量）、**ME终端**（右键看全网物品清单，GameUI 面板）。
+- **导出均分**：同一网络内多接口导出时按 round-robin 逐件轮询（接口级起点轮换 + 物品级按 ItemType 枚举序轮询），避免单一接口/单一物品饿死；导出只走机器 INPUT 面，OUTPUT 面仅出产物。
+- 设备四邻自动链接成网；连通块=一个网络，`MeNetwork{items, totalItems, capacity}` 全局共享（MeSystem 内 static vector）。
+- **任意 ME 设备都是网络入口**：机器输出/管道路由可直接顶在 MeInterface/MeDrive/MeTerminal 上入网（不只是接口！用户踩过这个坑）。
+- 网络编号按**行主序 BFS** 确定（确定性→存档可复现）；拓扑变化时物品按"锚点（最左上设备格）"迁移，合并/分裂不丢物品。
+- 机器拉取与出网导出共用 `PipeSystem::wantedInputs`。
+- 造价门槛（电路板+钢锭）自然形成"前期管道→后期ME"的科技曲线。
+
+### 5.6 商店 / 背包（B 键，add.txt ②；v1.2.4 重构）
+- 全屏商店页（B 键或左上角「商店」按钮）；价目 = `SHOP_OFFERS`（config.json `shop_offers`）。
+- 侧边栏改为**背包**：上方机器格（点击选中进入放置，悬停显示全名+数量）、下方物品格；数据 `Game::backpackMachines`（存档 `machines` 字段，旧档缺失回落 100000）。
+- 兑换机器 → **成品进背包 +1**，放置时扣背包机器数、拆除返还（`hasFreePlace/freePlaceType` 为旧逻辑保留）。
+- **当前价目是占位起步表**（铁锭×50=100金等）——用户明确"配方表以后再写"，那个"200币+10电路板=1组装机"示例**不得加入**。
+
+### 5.7 波次与敌人
+- **波次自动生成关闭**（wave_auto_spawn=false，测试模式；用户说"目前不打开显示刷怪功能"）。倒计时→每1秒出怪→每波5+2×波数逻辑保留在 EnemySystem::updateWaves，开关打开即恢复。
+- **分键召唤**：Z=普通 X=快速 C=坦克（U=普通兼容）。敌人沿 PATH_POINTS（10点，200×200）移动，到终点扣命（初始10），击杀只加金币。
+- 三种敌人：basic 100血/1.5速/20金，fast 60/3.0/30，tank 300/0.8/50。
+
+### 5.8 炮塔
+- 基础/速射/狙击/电力 4 种（1/2 键）；基础塔需要弹药（Inventory+Turret.ammo），电力塔 8EU/s 入网、内部电力100、每发耗10。
+
+### 5.9 GUI / 地图
+- 暗色工业风全 UI（GameUI.cpp 顶部 UI_* 常量统一配色）；地形程序化（草地草斑/路径碎石车辙，覆盖 PNG）。
+- **小地图**（左下 160px，Xaero 式：地形/矿点/建筑/敌人+视野框，0.3s 节流重建到 RenderTexture）；**世界地图**（M 键全屏，1格=1像素最近邻放大）。
+- 中文字体打包 `assets/fonts/simsun.ttc`，加载顺序：打包字体→系统字体。
+- **游戏内说明书 / 新手引导**（v1.3.0，`GameUI::drawHelp`）：H / F1 或左上角「帮助」按钮打开；6 个标签页——新手引导（7 步上手）/ 操作按键 / 建筑一览 / 生产与物流 / 电力系统 / 常见问题，文案集中在 `GameUI.cpp` 末尾匿名 namespace 的 `buildHelpPage()`，建筑说明在 `buildingHelp()`（按 `BuildingType` switch，新增建筑时记得补）。滚轮滚动用 `helpScroll_`（绘制时按内容高度钳制上限）；与商店/工作台/世界地图互斥；`Game` 构造末尾 `if (!hasSave()) ui->openHelp(0)` 实现新开局自动弹出。
+
+### 5.10 快捷键总表
+WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉7组装机8发电机9电线杆0燃煤发电机 -电容 =电线 \分流器 / TAB循环 / 左键放置（带方向弹窗） / 右键：矿机转面、组装机配方、ME设备→终端面板、电线机器桶发电机→面编辑器 / DEL拆除返还 / Z X C U 刷怪 / B 商店 / V 工作台 / M 世界地图 / H F1 说明书 / F5存 F9读 / ESC：有面板先关面板，否则打开暂停面板（继续游戏/保存存档/设置/返回主界面）
+
+---
+
+## 6. 建筑类型索引（存档 type 字段；**旧值不可改，新增只能追加末尾**）
+
+0 TowerBasic, 1 TowerRapid, 2 TowerSniper, 3 TowerElectric,
+4 Miner, 5 MinerL2, 6 MinerL3, 7 MinerVoid,
+8 Furnace, 9 Assembler, 10 Generator(旧2×2), 11 PowerPole,
+12 PowerGenerator, 13 Capacitor, 14 PowerWire,
+15 Pipe, 16 Bucket, 17 Splitter, 18 AlloyFurnace,
+19 MeInterface, 20 MeDrive, 21 MeTerminal
+（MachineKind：Miner/Furnace/AlloyFurnace/Assembler）
+
+---
+
+## 7. 建筑放置与拆除（Game.cpp）
+
+- `canPlace`：越界/占用检查；**管道可放在路径上**（其余建筑要求草地）；2×2 仅旧版发电机。
+- `placeBuilding(tx,ty,t,dir,deduct)`：创建 Building+按类型加组件 → `registerToGrid` → 管道/分流器/ME设备时 `PipeSystem::updateNeighbors` + `MeSystem::markDirty` → 电网相关 `power.dirty=true`。
+- `removeBuilding`：退费 → 注销网格 → destroy → 物流掩码刷新 / 电网脏标记。
+- 成本：`BUILDING_INFOS`（GameConfig.h，可被 config.json `building_costs` 覆盖）；**测试版资源无限**（RESOURCE_INFINITE=true）：`canAfford` 恒真、`deductCost/refundCost` 空操作、全部20物品发999999、读档后补全（这是用户明确要的"对内测试版所有资源无限"）。
+
+---
+
+## 8. 数值配置（两处，缺一不可）
+
+### 8.1 `src/GameConfig.h` —— 内置默认值（中文注释）
+- `inline` 变量 = 可被 JSON 覆盖（注释标 `[JSON可调]`）；`inline constexpr` = 编译期常量。
+- 改这里需要重新编译。
+- 注意顺序依赖：SMELT_TIME_* 声明在配方表之前；BuildingType 枚举在 SHOP_OFFERS 之前。
+
+### 8.2 `assets/config.json` —— 运行时覆盖（★用户最看重："改数值无需重编译"）
+- **游戏实际读取的是 `build/assets/config.json`**（相对 cwd）。改源码 assets 版要重新构建（自动复制）；改 build 版重启即生效。
+- 加载器 `ConfigLoader::loadConfig`（Game 构造函数最先调用）：**只覆盖存在的字段**，缺字段用内置默认值；JSON 解析失败静默回退默认。
+- 主要键：initial_gold/lives、wave_*、infinite_resource/resource_infinite（无限资源开关）、ore_counts{8种}+ore_deposit_amount、miner_radius/rate_*+void_miner_rate、smelt_time_*、tower_stats{4种}、enemy_stats{3种}、assembler/furnace/alloy_furnace/crafting_recipes（可增删配方）、shop_offers、building_costs、电网项(powergen_output_eu_s/alloy_furnace_energy=16/capacitor_*)、pipes_*、splitter_*、me_*。
+- 配方表在 JSON 里可以**增删条目**（loadRecipes 全量替换 vector）。
+- ⚠ 物品键名/建筑键名必须与 §5.1/§6 一致（ItemSystem::parse、ConfigLoader::parseBuilding）。
+
+---
+
+## 9. 存档（SaveSystem.cpp，JSON：build/saves/factory_td.json）
+
+- **保存顺序**：v/gold/lives/wave状态/cam_x,cam_y/inv → ores(含amount) → buildings → pipes(缓冲) → me_networks → enemies。
+- **加载顺序**：解析JSON(失败直接返回，不清世界) → 清空reg+网格 → 矿点 → 建筑(placeBuilding+恢复各类型状态+统一恢复faces) → 管道缓冲(按坐标直接回填，不再重复place) → ME网络(rebuildNetworks后按编号回填) → 敌人 → 全局状态 → 无限资源补全 → power.dirty。
+- **每类建筑保存/恢复的内容**：塔(ammo/barrel/power)、矿机(level/void/acc/**库存items**)、熔炉合金组装机(has_job/job_input/job_time/job_total/recipe/items)、发电机(coal/fuel_time/burn)、桶(items/output_timer)、电容(energy)、分流器(queue/output_index)、**所有 FaceConfig 统一保存 faces**、摄像机。
+- 未保存（有意/可接受）：子弹、塔冷却、UI瞬态、管道计时器。
+- ME 网络编号确定性：布局相同→行主序BFS编号相同→按数组下标回填。
+
+### 9.1 ⚠ 存档史上最严重 bug（已修，勿重犯）
+读档代码曾写 `bj.value("items", json::object()).begin()/end()`——两次 `value()` 产生**两个临时对象**，迭代器悬空 → 只要库存非空读档就崩，方块物品全丢。**规则：`value()` 结果必须先绑定 `const json&` 再取 begin/end**（全项目已清理4处，新代码同样遵守）。
+
+---
+
+## 10. 渲染与贴图
+
+- RenderSystem 分 13 层顶点数组批量渲染+视野剔除；贴图分辨率无关（drawGridSprite 归一化到 TILE_SIZE）。
+- 程序化生成（AssetManager::generateStaticTextures）：地形(覆盖PNG)、熔炉/合金炉4方向、电容、发电机、矿机L2/L3/虚空4方向（machineKey(rotated=true) 映射 (d+3)%4）、5种新矿石（PNG缺失时兜底）。
+- 管道/分流器/ME设备在 RenderSystem 第4层程序化绘制（外壳+connMask连接条+端点暗色端口；ME青色）；ME接口菱形/存储容量条/终端屏幕。
+- **纯紫块=PNG缺失回退**：`loadTexture` 失败插紫红；`tryLoadTexture` 失败不插（给程序化兜底让路）——新加"PNG可有可无+程序化兜底"的贴图用后者。
+
+---
+
+## 11. 踩过的坑清单（给下一个 AI 避雷）
+
+1. EnTT 3.13：view 无 size/empty；each() 单组件2元组；结构化绑定数必须匹配。
+2. `sf::Color` 非字面量 → 用 `inline const` 而非 `constexpr`。
+3. `sf::String::fromUtf8` 需要双指针重载（begin/end）。
+4. 负坐标取格要 floor（tileAt）。
+5. 窗口最大化点击失效 → 全部布局用运行时窗口尺寸（updateLayout/Resized）。
+6. DPI 150%：自动化测试坐标÷1.5。
+7. LTO 警告→exit code 1 假象（见 §3.2）。
+8. 存档 JSON 迭代器悬空（§9.1）。
+9. 管道接收端遗忘（机器/发电机/ME设备都曾漏过）→ 新增"端点"时同步改 PipeSystem::acceptsItem/deliverItem。
+10. ME 设备入口只认接口 → 已改为任意 ME 设备（meNetworkOf）。
+11. 管道 buffer 双重保存→读档重复placeBuilding失败 → 已改为按坐标回填。
+12. 无限资源只发4种物品 → 已改全物品发放+canAfford恒真。
+13. 建筑枚举加成员**只能追加末尾**（存档 type 兼容）。
+14. ItemType 加成员：枚举+ITEM_INFOS+ITEM_KEYS 三处同步。
+15. 沙箱：pwsh 无状态（用 workdir）；禁写 CMakeLists 名文件/点文件/entt-3.13.2 目录；联网走 127.0.0.1:7897。
+16. 机器输出面（FaceConfig）曾漏存 → 现在所有 FaceConfig 统一保存。
+17. **文档只改 `build/` 副本**：`build/update.md`、`build/README.md` 是构建产物，改它们不会同步回源码目录。**文档源在根目录**（README.md / update.md / ai.md），已发生过落后两个版本的事故。
+18. **菜单类界面的鼠标悬停不要每帧夺焦**（本轮踩过、已修，见 §0.3）：写 `if (r.contains(mp)) settingRow = i;` 会导致鼠标停住时键盘焦点被每帧弹回该行，↑↓/←→ 形同失效。**鼠标悬停只该改"高亮"，只有在鼠标真正移动时才允许它接管键盘焦点**（记住上一帧鼠标位置做比较）。
+19. **不能在 `pollEvent` 事件循环内重建 SFML 窗口**：切换显示模式（全屏/分辨率）需重建窗口，必须延后到事件循环之外执行，否则崩溃/事件丢失。EntrySystem 用 `pendingDisplayApply` 标志在 `render()` 开头统一处理。
+20. **exe 必须在 `build/` 下运行**：所有路径（assets / saves）都相对 cwd。在 `factory-td/` 下跑会写出杂散文件 `factory-td/saves/settings.json`（已实际发生）。
+
+---
+
+## 12. 未完成 / 用户明确暂缓事项
+
+| 事项 | 状态（用户原话） |
+|---|---|
+| 游戏内暂停面板（v1.3.2，已发布） | **代码完成、编译/自检/冒烟通过、文档已同步**；唯一遗留 = 人工实机视觉走查（见 §0） |
+| 启动入口系统（v1.3.1，已发布） | 代码完成、编译/自检/冒烟通过、文档已同步；人工视觉走查见 §0 |
+| 游戏内"设置"入口 | 未做（当前设置只在启动菜单改）；做之前先问用户 |
+| 商店正式配方表 | **以后再写**；当前 shop_offers 是占位（示例"200币+10电路板=1组装机"禁止加入） |
+| 音效 | 以后再加 |
+| 粒子特效 | 性能问题暂时不加 |
+| 自动化测试入库 | 暂时不用（但已有 --selftest-save 可用） |
+| 波次"显示刷怪"UI | 目前不打开（wave_auto_spawn=false；分键召唤已做） |
+| 矿机合成表 | 待定（逻辑已写好，造价是占位） |
+| 新手引导 / 游戏内说明书 | **已完成**（v1.3.0：H / F1 + 左上角帮助按钮 + 新开局自动弹出，6 标签页） |
+| 性能基准 | 用户说不需要 |
+| 电网损耗/过载 | 设计如此，不改 |
+| 击杀掉落 | 只加金币，不产生掉落（按需求） |
+
+可能被用户后续提出的方向（来自对话）：逐格传递式管道（用户最终选了瞬时+网络全局显示，但可能再改主意）、更多合金/配方、正式商店价目、音效、GUI 精修、AI 敌人、波次开关 UI。
+
+---
+
+## 13. 用户交流偏好（重要）
+
+- **中文**交流；代码注释、文档全部中文。
+- 需求源：`add.txt` 是最高优先级；口头反馈常以"为啥XXX"提问——**先解析根因（最好看存档/布局数据）再修**，修完解释清楚。
+- 用户会实际游玩并截图报 bug（图里信息量很大，仔细读布局）。
+- 标准：**"代码合理简洁无bug可扩展"**；每批改动必须编译+运行验证；数值必须集中可配置（改数值不重编译）。
+- 用户对"设计如此"的决定要尊重（如无损耗电网、测试版无限资源、波次关闭）。
+- 改动记录：每次有实质变更要更新 `update.md`（Python 日志格式：## Alpha vX.Y.Z (当前版本 - 日期) + ### 新增功能/Bug修复/系统优化）、README、PORTING.md 同步。
+
+---
+
+## 14. 版本与文档
+
+- 代码版本进度见 `update.md`：**Alpha v1.3.2 为当前版本**（游戏内暂停面板 + 设置项共用化）；v1.3.1 启动入口系统 + 跨场景用户设置；v1.3.0 游戏内说明书 / 新手引导；v1.2.4 商店与背包重构 + 合金炉改为选定配方且无需电力；v1.2.3 ME 接口输出过滤 + GUI/贴图重设计；v1.2.1 ME 网络 + 存档修复；v1.2.0 为 add.txt 主体功能（含管道设计解析）；v1.1.0 为早期重构。
+- 注意 update.md 里的日期（08-15~17）比实际开发日（08-25）滞后一周左右，继续写时用真实日期即可。
+- Python 老版在 `python版（老版）/`，PORTING.md 有逐文件对照，不再维护。

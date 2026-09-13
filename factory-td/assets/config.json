@@ -1,0 +1,140 @@
+{
+  "_说明": "factory-td 游戏数值配置：修改后重启游戏即生效，无需重新编译。字段缺失时使用内置默认值。",
+
+  "initial_gold": 100000,
+  "initial_lives": 10,
+
+  "wave_interval": 10.0,
+  "wave_enemies": 5,
+  "initial_countdown": 180.0,
+  "spawn_interval": 1.0,
+  "wave_auto_spawn": false,
+
+  "infinite_resource": 999999,
+  "resource_infinite": true,
+
+  "ore_counts": {
+    "iron": 128, "copper": 96, "coal": 80,
+    "gold": 40, "diamond": 24, "nickel": 48, "silver": 40, "lead": 48
+  },
+  "ore_deposit_amount": 1000,
+
+  "miner_radius_l1": 2,
+  "miner_radius_l2": 4,
+  "miner_radius_l3": 6,
+  "miner_rate_l1": 4.0,
+  "miner_rate_l2": 16.0,
+  "miner_rate_l3": 256.0,
+  "void_miner_rate": 4096.0,
+
+  "mining_time_iron": 2.0,
+  "mining_time_copper": 2.0,
+  "mining_time_coal": 1.5,
+  "smelt_time_iron": 2.0,
+  "smelt_time_copper": 2.0,
+
+  "tower_stats": {
+    "basic":    { "range": 150, "damage": 20, "fire_rate": 1.0, "bullet_speed": 10 },
+    "rapid":    { "range": 120, "damage": 10, "fire_rate": 3.0, "bullet_speed": 15 },
+    "sniper":   { "range": 250, "damage": 50, "fire_rate": 0.5, "bullet_speed": 8 },
+    "electric": { "range": 180, "damage": 25, "fire_rate": 2.0, "bullet_speed": 12 }
+  },
+  "turret_ammo_max_stack": 20,
+  "turret_ammo_max_slots": 3,
+  "electric_tower_max_power": 100.0,
+  "electric_tower_shot_cost": 10.0,
+
+  "enemy_stats": {
+    "basic": { "health": 100, "speed": 1.5, "reward": 20 },
+    "fast":  { "health": 60,  "speed": 3.0, "reward": 30 },
+    "tank":  { "health": 300, "speed": 0.8, "reward": 50 }
+  },
+
+  "assembler_recipes": [
+    { "name": "弹药",   "inputs": { "iron_ingot": 2, "copper_ingot": 1 }, "outputs": { "ammo": 1 }, "craft_time": 1.0 },
+    { "name": "电路板", "inputs": { "iron_ingot": 1, "copper_ingot": 1 }, "outputs": { "circuit_board": 1 }, "craft_time": 1.0 }
+  ],
+
+  "furnace_recipes": [
+    { "name": "铁锭", "inputs": { "iron_ore": 1 },   "outputs": { "iron_ingot": 1 },   "craft_time": 2.0 },
+    { "name": "铜锭", "inputs": { "copper_ore": 1 }, "outputs": { "copper_ingot": 1 }, "craft_time": 2.0 },
+    { "name": "金锭", "inputs": { "gold_ore": 1 },   "outputs": { "gold_ingot": 1 },   "craft_time": 3.0 },
+    { "name": "镍锭", "inputs": { "nickel_ore": 1 }, "outputs": { "nickel_ingot": 1 }, "craft_time": 3.0 },
+    { "name": "银锭", "inputs": { "silver_ore": 1 }, "outputs": { "silver_ingot": 1 }, "craft_time": 3.0 },
+    { "name": "铅锭", "inputs": { "lead_ore": 1 },   "outputs": { "lead_ingot": 1 },   "craft_time": 3.0 }
+  ],
+
+  "alloy_furnace_recipes": [
+    { "name": "钢锭",     "inputs": { "iron_ingot": 2, "coal": 2 },        "outputs": { "steel_ingot": 1 },      "craft_time": 6.0 },
+    { "name": "琥珀金锭", "inputs": { "gold_ingot": 1, "silver_ingot": 1 }, "outputs": { "electrum_ingot": 2 },   "craft_time": 4.0 },
+    { "name": "因瓦锭",   "inputs": { "iron_ingot": 2, "nickel_ingot": 1 }, "outputs": { "invar_ingot": 3 },      "craft_time": 5.0 },
+    { "name": "康铜锭",   "inputs": { "copper_ingot": 1, "nickel_ingot": 1 }, "outputs": { "constantan_ingot": 2 }, "craft_time": 4.0 }
+  ],
+
+  "crafting_recipes": [
+    { "name": "电路板", "inputs": { "iron_ingot": 1, "copper_ingot": 1 }, "outputs": { "circuit_board": 1 }, "craft_time": 0.5 },
+    { "name": "弹药",   "inputs": { "iron_ingot": 2, "copper_ingot": 1 }, "outputs": { "ammo": 1 }, "craft_time": 0.5 }
+  ],
+
+  "shop_offers": [
+    { "name": "铁锭×50",    "gold": 100,  "give": { "iron_ingot": 50 } },
+    { "name": "铜锭×50",    "gold": 100,  "give": { "copper_ingot": 50 } },
+    { "name": "电路板×10",  "gold": 50,   "give": { "circuit_board": 10 } },
+    { "name": "钢锭×5",     "gold": 300,  "cost": { "circuit_board": 2 },  "give": { "steel_ingot": 5 } },
+    { "name": "虚空采矿场", "gold": 5000, "cost": { "circuit_board": 64 }, "building": "miner_void" }
+  ],
+
+  "building_costs": {
+    "basic_tower":     { "iron_ore": 15, "copper_ore": 5 },
+    "rapid_tower":     { "iron_ore": 20, "copper_ore": 10 },
+    "sniper_tower":    { "iron_ore": 25, "copper_ore": 15 },
+    "electric_tower":  { "iron_ore": 25, "copper_ore": 20 },
+    "miner":           { "iron_ore": 10, "copper_ore": 5 },
+    "miner_l2":        { "iron_ore": 30, "copper_ore": 20, "circuit_board": 4 },
+    "miner_l3":        { "iron_ore": 90, "copper_ore": 60, "circuit_board": 16 },
+    "miner_void":      { "iron_ore": 300, "copper_ore": 200, "circuit_board": 64 },
+    "furnace":         { "iron_ore": 20, "copper_ore": 5 },
+    "assembler":       { "iron_ore": 30, "copper_ore": 15 },
+    "generator":       { "iron_ore": 20, "copper_ore": 10, "coal": 10 },
+    "power_pole":      { "iron_ore": 5, "copper_ore": 2 },
+    "power_generator": { "iron_ore": 30, "copper_ore": 15 },
+    "capacitor":       { "iron_ore": 25, "copper_ore": 20 },
+    "power_wire":      { "iron_ore": 3, "copper_ore": 2 },
+    "pipe":            { "iron_ore": 5 },
+    "bucket":          { "iron_ore": 5 },
+    "splitter":        { "iron_ore": 8, "copper_ore": 5 },
+    "alloy_furnace":   { "iron_ore": 80, "copper_ore": 40, "circuit_board": 8 },
+    "me_interface":    { "iron_ingot": 20, "copper_ingot": 10, "circuit_board": 4 },
+    "me_drive":        { "iron_ingot": 10, "copper_ingot": 5, "circuit_board": 8, "steel_ingot": 2 },
+    "me_terminal":     { "iron_ingot": 5, "copper_ingot": 5, "circuit_board": 4 }
+  },
+
+  "legacy_gen_power_output": 3000,
+  "legacy_gen_burn_time": 3.0,
+  "legacy_gen_max_coal": 50,
+  "powergen_output_eu_s": 32.0,
+  "powergen_coal_burn_time": 5.0,
+  "powergen_infinite_fuel": false,
+
+  "power_pole_radius": 150.0,
+  "electric_tower_grid_need": 8.0,
+  "miner_power_need": 10.0,
+  "miner_free_power": true,
+  "capacitor_capacity": 50000.0,
+  "capacitor_max_in": 64.0,
+  "capacitor_max_out": 64.0,
+  "alloy_furnace_energy": 16.0,
+
+  "pipes_transfer_interval": 0.25,
+  "pipes_max_buffer": 16,
+  "pipes_max_hops": 100,
+  "pipes_pull_per_tick": 4,
+  "bucket_capacity": 99999,
+  "bucket_output_interval": 0.5,
+  "splitter_transfer_interval": 0.15,
+  "splitter_max_queue": 100,
+  "me_transfer_interval": 0.25,
+  "me_import_per_tick": 16,
+  "me_export_per_tick": 4,
+  "me_drive_capacity": 20000
+}

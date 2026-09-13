@@ -1,0 +1,75 @@
+# =====================================================================
+#  jyfactorio —— 仓库根 .gitignore
+#  覆盖两个子工程：factory-td/（C++ 重构版）与 python版（老版）/
+# =====================================================================
+
+# ---------- 构建产物 ----------
+build/
+out/
+dist/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+*.log
+
+# ---------- 第三方依赖 ----------
+# deps/ 体积近 200MB，且 CMakeLists.txt 支持 FetchContent 自动下载
+# （或改用 vcpkg.json manifest / 系统包），无需入库
+factory-td/deps/
+vcpkg_installed/
+vcpkg-manifest-install.log
+
+# ---------- 压缩包 / 二进制分发件 ----------
+# 需要分发编译好的游戏请走 GitHub Releases，不要塞进仓库
+*.rar
+*.zip
+*.7z
+*.tar.gz
+
+# ---------- Python（老版） ----------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ---------- 存档 / 运行时用户数据 ----------
+saves/
+*.sav
+
+# ---------- 编辑器 / IDE ----------
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+*~
+
+# ---------- 操作系统 ----------
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ---------- 版权字体 ----------
+# simsun.ttc 是 Windows 系统自带字体，不可随公开仓库再分发。
+# 若仓库设为私有、或已换成开源中文字体（如 Noto Sans SC / 思源黑体），删掉下面一行。
+factory-td/assets/fonts/*.ttc
+
+# ---------- AI 协作工具数据 ----------
+# 不想公开 .codebuddy/ 就保留此行；想公开则删掉
+.codebuddy/
