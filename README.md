@@ -9,6 +9,17 @@
 
 由 Python/Pygame 版本重构移植的 **C++20 + SFML 2.6 + EnTT** 高性能版本。
 
+## 下载与运行（免安装）
+
+> **⬇ [factory-td-v1.3.2-win64.zip](https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.2/factory-td-v1.3.2-win64.zip)**
+> —— Windows 64 位绿色包，解压即玩。
+
+1. 下载 zip 后**把整个文件夹一起解压**到任意目录（不要只把 exe 单独拖出来）。
+2. 双击 `factory-td.exe` 开始游戏；**无需安装 SFML、编译器或任何运行库**。
+3. 存档与设置自动生成在解压目录的 `saves/` 下（F5 保存 / F9 读取）。
+
+包内清单：`factory-td.exe`、SFML 运行库 + MinGW 运行时 DLL、`assets/`（数值配置 / 贴图 / 中文字体）、`README.md`、`docs/`（`update.md` 等全部文档）、`运行说明.txt`。
+
 ## 玩法简介
 
 - **两段式物流**：
@@ -67,6 +78,73 @@ Linux/macOS 同理，使用 `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsys
 **性能分析（可选）**：先安装 tracy，再 `-DTRACY_ENABLE=ON` 启用打点。
 
 **存档自检（可选）**：`build\factory-td.exe --selftest-save` 运行存档保存→读档往返自检（21 项核对，自动备份/恢复你的存档，退出码 0=通过）。
+
+## 打包发布（免安装绿色包）
+
+对外分发**不要**直接交付 `build/` 目录（里面混着 `CMakeCache.txt`、Debug 版 DLL、构建中间文件、临时截图），改用打包脚本：
+
+```bat
+cd factory-td
+build.bat      :: 1. 编译（对外发布建议用可分发构建，见下）
+package.bat    :: 2. 自动打包 → dist\factory-td-v1.3.2-win64.zip
+```
+
+`package.bat` 按当前项目结构自动收集：
+
+| 收集项 | 来源 | 说明 |
+|---|---|---|
+| 版本号 | `src/GameConfig.h` | 正则解析 `vX.Y.Z`，据此命名包与 zip |
+| 主程序 | `build/factory-td.exe` | 缺失则报错并提示先编译 |
+| SFML 运行库 | `build/sfml-*-2.dll`、`openal32.dll` | 只取 Release 版，**自动跳过 `*-d-*.dll` 调试库** |
+| MinGW 运行时 | 编译器 `mingw64\bin` | `libstdc++-6.dll` / `libgcc_s_seh-1.dll` / `libwinpthread-1.dll`，**漏拷就会在别人机器上报"找不到 libstdc++-6.dll"** |
+| 游戏资源 | `build/assets/` | `config.json` + 全部贴图 + 中文字体 |
+| 文档 | 仓库根目录 | **根目录所有 `.md`**（`README`/`update`/`PORTING`/`TODO`/`ai`）→ 包内 `docs/`，`README.md` 另放一份到包根 |
+| 其它 | 仓库根目录 | `LICENSE`（存在时）、自动生成的 `运行说明.txt` |
+
+结果目录 `dist/` 与 `*.zip` 已在 `.gitignore` 排除 —— **编译产物不进仓库，走 GitHub Releases 分发**。
+
+### 通用指令集构建（`package.bat` 会自动处理）
+
+默认构建带 `-march=native`，会把**你本机 CPU 的专属指令集**写进 exe，拷到别的电脑可能直接"非法指令"闪退。
+
+`package.bat` 已内置处理：**只要检测到 `build/` 含 `-march=native`（或缺 exe），就自动用可分发模式重新编译、再打包**，无需手动敲 cmake：
+
+```bat
+cd factory-td
+package.bat            :: 自动检测 →（必要时）通用版重编译 → 打包
+package.bat nobuild    :: 跳过重编译，直接用现有 build 打包（自用快速出包）
+```
+
+- 自动重编译用的 cmake 会先在 `PATH` 查找，找不到再用已知位置（`D:\miniconda\envs\lerobot\Scripts\cmake.exe`、`%ProgramFiles%\CMake\bin\cmake.exe`）；编译前把小熊猫 MinGW 的 `bin` 临时加入 `PATH`——**所以即使 `cmake` / `g++` 没进 PATH 也能一键出包**。
+- 若确实找不到 cmake，脚本会打印手动命令并以醒目警告继续打包（此时产出的包仅供自用）。
+
+> 手动等价命令（脚本内部执行的就是它）：
+> ```bat
+> cmake -B build -S . -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DFACTORYTD_PORTABLE=ON
+> cmake --build build -j 8
+> package.bat
+> ```
+
+> 维护提示：`package.bat` 是 UTF-8（无 BOM），文件顶部的 `if not defined __PKG_U8 ( ... )` 是一段**纯 ASCII 引导块**——它先把控制台切到 65001，再让子 cmd 重新读取整个脚本。这是为规避「cmd 解析含中文的批处理时按代码页错位、报 `is not recognized`」的问题（Windows 默认 936 代码页下必现）。**请勿在该引导块上方添加任何中文/非 ASCII 内容，也不要删改它**，否则打包脚本会再次解析错乱。
+
+### 发布到 GitHub Releases
+
+```bat
+git tag -a v1.3.2 -m "Alpha v1.3.2"
+git push origin v1.3.2
+```
+
+然后打开 `https://github.com/liuyandi386/jyfactorio/releases/new?tag=v1.3.2`，把 `dist\factory-td-v1.3.2-win64.zip` 拖进 **Attach binaries**，标题填 `Alpha v1.3.2`，正文可直接用 `update.md` 里对应章节，点 **Publish release**。
+
+发布后该文件的永久下载地址（文档中用的就是它）：
+
+```
+https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.2/factory-td-v1.3.2-win64.zip
+```
+
+> **地址规则**：`releases/download/<tag>/<附件文件名>`，tag 名与文件名必须完全一致，否则 404。`releases/latest/download/<文件名>` 始终指向最新版，但文件名带版本号，升版后会失效。
+
+> ⚠️ **字体授权提醒**：`assets/fonts/simsun.ttc` 是 Windows 自带的**中易宋体，不可再分发**。`.gitignore` 已把 `*.ttc` 挡在仓库外，但打包会从工作区把它拷进 zip。若要公开发布，建议换成开源中文字体（Noto Sans SC / 思源黑体）；不打包字体时程序会自动回退到系统字体（`C:\Windows\Fonts\simsun.ttc`），中文 Windows 上仍能正常显示。
 
 ## 启动流程与设置
 
@@ -166,6 +244,8 @@ jyfactorio/
 │   ├── CMakeLists.txt           # C++20 / O3 -march=native -flto / 三级依赖探测
 │   ├── vcpkg.json               # sfml, entt
 │   ├── build.bat                # 一键构建脚本
+│   ├── package.bat              # 免安装绿色包打包脚本（产出 dist\*.zip）
+│   ├── dist/                    # 打包输出目录（已 gitignore）
 │   └── PORTING.md               # Python→C++移植对照表
 └── python版（老版）/            # Python原版（见第二部分）
 ```

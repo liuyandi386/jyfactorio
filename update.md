@@ -6,6 +6,14 @@
 
 ## Alpha v1.3.2 (当前版本 - 2026-09-13)
 
+### 下载（Windows 64 位 · 免安装）
+
+- **⬇ [factory-td-v1.3.2-win64.zip](https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.2/factory-td-v1.3.2-win64.zip)**
+  解压后双击 `factory-td.exe` 即可游玩，**无需安装 SFML / 编译器 / 任何运行库**。
+- 全部版本：[Releases 页面](https://github.com/liuyandi386/jyfactorio/releases)
+
+> 该压缩包由 `factory-td/package.bat` 从 `build/` 产出目录自动收集打包生成（打包范围与发布流程见 [README.md](README.md) 的「打包发布（免安装绿色包）」章节）。
+
 ### 新增功能
 
 - **游戏内暂停面板（`ESC`）**：参考《我的世界》等游戏的暂停菜单——全屏变暗 + 居中纵向按钮列。

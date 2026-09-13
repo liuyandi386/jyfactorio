@@ -133,13 +133,28 @@ if(NOT MSVC)
 endif()
 
 # ---------- 优化选项 (O3 / -march=native / LTO) ----------
+# FACTORYTD_PORTABLE=ON：不使用本机专属指令集，生成可分发到其它电脑的通用二进制
+# （对外发布走 package.bat 时请打开，否则 -march=native 会让 exe 换机器就崩）。
+option(FACTORYTD_PORTABLE "生成可分发到其它机器的通用二进制(不用 -march=native)" OFF)
+
 if(MSVC)
-    # MSVC: 全程序优化 + AVX2 + UTF-8源码编码
-    target_compile_options(factory-td PRIVATE /O2 /GL /arch:AVX2 /utf-8)
+    # MSVC: 全程序优化 + UTF-8源码编码
+    target_compile_options(factory-td PRIVATE /O2 /GL /utf-8)
     target_link_options(factory-td PRIVATE /LTCG)
+    if(NOT FACTORYTD_PORTABLE)
+        target_compile_options(factory-td PRIVATE /arch:AVX2)
+    else()
+        message(STATUS "可分发构建：不启用 /arch:AVX2")
+    endif()
 else()
-    # GCC(含小熊猫C++自带MinGW)/Clang: O3 + 本机指令集 + 链接时优化
-    target_compile_options(factory-td PRIVATE -O3 -march=native -flto)
+    # GCC(含小熊猫C++自带MinGW)/Clang: O3 + 链接时优化
+    if(FACTORYTD_PORTABLE)
+        target_compile_options(factory-td PRIVATE -O3 -flto)
+        message(STATUS "可分发构建：不使用 -march=native（通用 x86-64 指令集）")
+    else()
+        target_compile_options(factory-td PRIVATE -O3 -march=native -flto)
+        message(STATUS "本机构建：启用 -march=native（勿直接对外分发）")
+    endif()
     target_link_options(factory-td PRIVATE -flto)
 endif()
 
