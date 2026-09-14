@@ -83,12 +83,14 @@ void MachineSystem::updateMachines(Game& g, float dt) {
                     if (pick != entt::null) {
                         auto& dep = g.reg.get<OreDeposit>(pick);
                         ore = dep.type;
-                        dep.amount--;               // 消耗矿点储量
-                        if (dep.amount <= 0) {      // 采尽 → 矿点消失，绑定随之失效
-                            g.reg.remove<OreDeposit>(pick);
-                            g.reg.remove<GridPos>(pick);
-                            g.reg.destroy(pick);
-                            m.hasBound = false;
+                        if (!cfg::ORE_INFINITE) {   // 无限开采：不扣储量、矿点永续
+                            dep.amount--;           // 消耗矿点储量
+                            if (dep.amount <= 0) {  // 采尽 → 矿点消失，绑定随之失效
+                                g.reg.remove<OreDeposit>(pick);
+                                g.reg.remove<GridPos>(pick);
+                                g.reg.destroy(pick);
+                                m.hasBound = false;
+                            }
                         }
                         mined = true;
                     }
@@ -108,11 +110,13 @@ void MachineSystem::updateMachines(Game& g, float dt) {
                             rng() % static_cast<uint32_t>(candidates.size()))];
                         auto& dep = g.reg.get<OreDeposit>(pick);
                         ore = dep.type;
-                        dep.amount--;               // 消耗矿点储量
-                        if (dep.amount <= 0) {      // 采尽 → 矿点消失
-                            g.reg.remove<OreDeposit>(pick);
-                            g.reg.remove<GridPos>(pick);
-                            g.reg.destroy(pick);
+                        if (!cfg::ORE_INFINITE) {   // 无限开采：不扣储量、矿点永续
+                            dep.amount--;           // 消耗矿点储量
+                            if (dep.amount <= 0) {  // 采尽 → 矿点消失
+                                g.reg.remove<OreDeposit>(pick);
+                                g.reg.remove<GridPos>(pick);
+                                g.reg.destroy(pick);
+                            }
                         }
                         mined = true;
                     }

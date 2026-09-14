@@ -78,8 +78,11 @@ inline int ORE_DIAMOND_COUNT = 24;      // 钻石矿点数量           [JSON可
 inline int ORE_NICKEL_COUNT  = 48;      // 镍矿点数量             [JSON可调]
 inline int ORE_SILVER_COUNT  = 40;      // 银矿点数量             [JSON可调]
 inline int ORE_LEAD_COUNT    = 48;      // 铅矿点数量             [JSON可调]
-// 矿点初始储量（有限矿点，采尽后消失）
-inline int ORE_DEPOSIT_AMOUNT = 1000;   // 每种矿点储量           [JSON可调]
+// 矿点储量模式：默认【无限开采】（矿点永不枯竭，与旧 Python 版一致）
+//   ORE_INFINITE = true  → 采矿不扣储量，矿点永续（ORE_DEPOSIT_AMOUNT 仅作初始值）
+//   ORE_INFINITE = false → 有限矿点：每点 ORE_DEPOSIT_AMOUNT，采尽后矿点消失
+inline bool ORE_INFINITE = true;        // 无限开采开关           [JSON可调]
+inline int ORE_DEPOSIT_AMOUNT = 1000;   // 矿点储量(有限模式)     [JSON可调]
 inline constexpr int ORE_X_MIN = 2, ORE_X_MAX = 197;   // 全图x范围(避开地图边缘)
 inline constexpr int ORE_Y_MIN = 2, ORE_Y_MAX = 197;   // 全图y范围
 

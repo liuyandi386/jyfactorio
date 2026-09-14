@@ -24,6 +24,7 @@
 - **原有模式**（默认）：半径内所有矿点随机采集——与旧版**行为逐字一致**。
 - **固定矿点模式**：吸附到矿点旁边，只采 `oreFilter` 那一个矿点；采尽/矿点消失自动回退到范围内最近的同矿种矿点。
 - **产量规则两种模式完全相同**（同一个 `m.rate`、`while (acc>=1)` 每轮结算 1 个）——这是需求硬约束，改逻辑时别动。
+- **矿点储量开关（v1.3.3 追加）**：新增 `cfg::ORE_INFINITE`（config `ore_infinite`，**默认 `true` = 无限开采**：采矿不扣储量、矿点永不消失，恢复旧 Python 版手感；置 `false` = 有限矿点 1000/点、采尽消失）。`MachineSystem::updateMachines` 两种模式都按该开关决定是否 `dep.amount--` / 销毁矿点；采矿场面板「剩余」在无限模式显示 `∞`，说明书文案随之切换。
 - `Game::moveBuilding()`：1×1 建筑移动（先注销占格 → 判定地形/占用 → 失败回滚），供"吸附"使用。
 - `GameUI` 新增采矿场设置面板（`showMinerPanel/handleMinerPanelClick/drawMinerPanel/layoutMinerPanel`），右键矿机**不再是"直接旋转"**。
 - `MinerSystem::rotateOutputFace()`：旋转时**同步 `b.dir` 与 `FaceConfig`**（旧版 `FaceConfig::rotate()` 只转面不改 `dir`，是"箭头与输出错位"的第二个根因）。
@@ -174,7 +175,7 @@ factory-td/
     │   ├── Item.h        # ItemType 枚举 + Inventory + ITEM_INFOS 引用
     │   ├── Pipe.h        # 管道：connMask + buffer(deque) + transferTimer
     │   ├── Me.h          # 通物接口/通物存储单元/通物终端：connMask + networkId（内部名仍为 Me*）
-    │   ├── Storage.h     # Bucket / SplitterQueue / OreDeposit(有限储量)
+    │   ├── Storage.h     # Bucket / SplitterQueue / OreDeposit(矿点储量, 默认无限开采)
     │   ├── Power.h       # PowerGeneratorNode / PowerCapacitor / PowerConsumer / PowerPole
     │   ├── Turret.h      # 炮塔：射程伤害射速/弹药/电力/炮管朝向
     │   ├── Enemy.h       # 敌人：类型/血量/速度/路径索引/目标
@@ -275,8 +276,8 @@ build\factory-td.exe --selftest-save
 （键名表在 `systems/ItemSystem.cpp` 的 ITEM_KEYS，与枚举严格同序——加物品时两处都要改 + GameConfig.h ITEM_INFOS）
 
 ### 5.2 采矿（add.txt ③④）
-- 8 种矿石独立矿点随机散布全图（种子42，避开路径、互不重叠）；**有限储量**每点 1000，采尽矿点消失。
-- **采矿场 1/2/3 级**（BuildingType Miner/MinerL2/MinerL3）：Chebyshev 范围内（5×5/9×9/13×13）采集**所有类型**矿石，每秒 4/16/256 个（`m.acc += rate*dt`，按矿点储量递减）。
+- 8 种矿石独立矿点随机散布全图（种子42，避开路径、互不重叠）；**默认无限开采**（`cfg::ORE_INFINITE = true`，采矿不扣储量、矿点永不消失，等同旧 Python 版"可无限开采"）；置 `false` 恢复有限矿点（每点 `ORE_DEPOSIT_AMOUNT`=1000，采尽消失）。
+- **采矿场 1/2/3 级**（BuildingType Miner/MinerL2/MinerL3）：Chebyshev 范围内（5×5/9×9/13×13）采集**所有类型**矿石，每秒 4/16/256 个（`m.acc += rate*dt`，非无限模式下按矿点储量递减）。
 - **虚空采矿场**（MinerVoid）：无矿点，8 矿石轮转产出共 4096/秒。
 - 采矿机**不再要求脚下有矿点**（预览已删该检查）；测试期免供电（MINER_FREE_POWER=true）。
 - **右键采矿机 = 打开设置面板**（v1.3.3，`GameUI::drawMinerPanel`），面板内含：**模式切换 / 矿种筛选（8 种）/ 旋转输出面 / 关闭**。**两种采集模式（v1.3.3）**：
@@ -385,7 +386,7 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 ### 8.2 `assets/config.json` —— 运行时覆盖（★用户最看重："改数值无需重编译"）
 - **游戏实际读取的是 `build/assets/config.json`**（相对 cwd）。改源码 assets 版要重新构建（自动复制）；改 build 版重启即生效。
 - 加载器 `ConfigLoader::loadConfig`（Game 构造函数最先调用）：**只覆盖存在的字段**，缺字段用内置默认值；JSON 解析失败静默回退默认。
-- 主要键：initial_gold/lives、wave_*、infinite_resource/resource_infinite（无限资源开关）、ore_counts{8种}+ore_deposit_amount、miner_radius/rate_*+void_miner_rate、smelt_time_*、tower_stats{4种}、enemy_stats{3种}、assembler/furnace/alloy_furnace/crafting_recipes（可增删配方）、shop_offers、building_costs、电网项(powergen_output_eu_s/alloy_furnace_energy=16/capacitor_*)、pipes_*、splitter_*、me_*。
+- 主要键：initial_gold/lives、wave_*、infinite_resource/resource_infinite（无限资源开关）、ore_counts{8种}+ore_infinite+ore_deposit_amount、miner_radius/rate_*+void_miner_rate、smelt_time_*、tower_stats{4种}、enemy_stats{3种}、assembler/furnace/alloy_furnace/crafting_recipes（可增删配方）、shop_offers、building_costs、电网项(powergen_output_eu_s/alloy_furnace_energy=16/capacitor_*)、pipes_*、splitter_*、me_*。
 - 配方表在 JSON 里可以**增删条目**（loadRecipes 全量替换 vector）。
 - ⚠ 物品键名/建筑键名必须与 §5.1/§6 一致（ItemSystem::parse、ConfigLoader::parseBuilding）。
 

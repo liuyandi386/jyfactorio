@@ -17,6 +17,7 @@
     "iron": 128, "copper": 96, "coal": 80,
     "gold": 40, "diamond": 24, "nickel": 48, "silver": 40, "lead": 48
   },
+  "ore_infinite": true,
   "ore_deposit_amount": 1000,
 
   "miner_radius_l1": 2,

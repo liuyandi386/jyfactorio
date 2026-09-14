@@ -76,7 +76,7 @@ bool saveGame(Game& g) {
             j["tutorial"] = std::move(tj);
         }
 
-        // ---- 矿点（先保存，加载时先恢复以便矿机定位；含有限储量） ----
+        // ---- 矿点（先保存，加载时先恢复以便矿机定位；含储量字段） ----
         j["ores"] = json::array();
         for (auto [e, pos, ore] : g.reg.view<GridPos, OreDeposit>().each())
             j["ores"].push_back({{"type", ItemSystem::key(ore.type)}, {"x", pos.x},
@@ -236,7 +236,7 @@ bool loadGame(Game& g) {
         g.power.dirty = true;
         g.faceEditTarget = entt::null;
 
-        // ---- 1. 矿点（矿机放置依赖矿点；恢复有限储量） ----
+        // ---- 1. 矿点（矿机放置依赖矿点；恢复储量字段） ----
         for (const auto& oj : j.value("ores", json::array())) {
             if (auto t = ItemSystem::parse(oj.value("type", ""))) {
                 const auto e = g.reg.create();

@@ -20,7 +20,7 @@
 | `entities/Tower.py` | `components/Turret.h` + `TurretSystem.cpp` | 数值/索敌（距终点最近）/弹药与电力消耗/冷却逐一对应 |
 | `entities/Enemy.py` | `components/Enemy.h` + `EnemySystem.cpp` | 预设路径移动、血量/奖励 |
 | `entities/Bullet.py` | `components/Bullet.h` + `TurretSystem.cpp` | 追踪、ease-out、<12px命中、拖尾 |
-| `entities/OreDeposit.py` | `components/Storage.h`(OreDeposit) | v1.2.0 改为有限储量（每矿点1000，采尽消失）；8种矿石独立随机分布 |
+| `entities/OreDeposit.py` | `components/Storage.h`(OreDeposit) | 8种矿石独立随机分布；v1.2.0 曾改为有限储量，v1.3.3 起默认**无限开采**（`ore_infinite`，置 `false` 恢复每矿点1000、采尽消失） |
 | `entities/Bucket.py` | `components/Storage.h`(Bucket) + `MachineSystem.cpp` | FIFO、0.5s输出间隔、容量99999 |
 | `entities/Generator.py`（旧发电机） | `components/Power.h`(PowerGeneratorNode legacyMode) + `PowerSystem.cpp` | 2×2占地、1煤→3000EU/3s；并入统一EU电网 |
 | `entities/PowerPole.py` | `components/Power.h`(PowerPole) + `PowerSystem.cpp` | 150px半径连接；并入统一EU电网（真正参与供电） |

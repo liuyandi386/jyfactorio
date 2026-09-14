@@ -1232,8 +1232,11 @@ void GameUI::drawMinerPanel(sf::RenderTarget& rt) {
             if (oe != entt::null) {
                 const auto& pos = g_->reg.get<GridPos>(oe);
                 const auto& dep = g_->reg.get<OreDeposit>(oe);
-                std::snprintf(line, sizeof(line), "绑定矿点：%s (%d,%d) 剩余 %d",
-                              ItemSystem::nameZh(dep.type), pos.x, pos.y, dep.amount);
+                char remain[16];
+                if (cfg::ORE_INFINITE) std::snprintf(remain, sizeof(remain), "∞");
+                else std::snprintf(remain, sizeof(remain), "%d", dep.amount);
+                std::snprintf(line, sizeof(line), "绑定矿点：%s (%d,%d) 剩余 %s",
+                              ItemSystem::nameZh(dep.type), pos.x, pos.y, remain);
                 stat = line;
             } else {
                 stat = "绑定矿点：无（范围内已无该矿种，采尽后自动切换同矿种矿点）";
@@ -1962,8 +1965,12 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             h("◆ 机器不工作？");
             p("熔炉 / 组装机靠相邻管道供料；合金炉要先右键选配方；电力塔需要电网供电。");
             h("◆ 采矿场不产矿？");
-            p("范围内必须有矿点（虚空采矿场除外）。按 M 看世界地图找矿点，");
-            p("每个矿点储量 1000，采完会消失。");
+            if (cfg::ORE_INFINITE) {
+                p("范围内必须有矿点（虚空采矿场除外）。按 M 看世界地图找矿点，矿点可无限开采。");
+            } else {
+                p("范围内必须有矿点（虚空采矿场除外）。按 M 看世界地图找矿点，");
+                p("每个矿点储量 1000，采完会消失。");
+            }
             h("◆ 电网不通？");
             p("发电机要有煤；线缆面要配成 输入/输出；电线杆之间不超过 150px。");
             p("电容库只储能，不会自己发电。");

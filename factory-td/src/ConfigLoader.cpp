@@ -70,7 +70,7 @@ bool loadConfig(const std::string& path) {
     setIf(INFINITE_RESOURCE, j, "infinite_resource");
     setIf(RESOURCE_INFINITE, j, "resource_infinite");
 
-    // ---- 矿点（8种矿石独立随机分布 + 有限储量） ----
+    // ---- 矿点（8种矿石独立随机分布 + 无限/有限储量） ----
     if (j.contains("ore_counts")) {
         const auto& o = j.at("ore_counts");
         setIf(ORE_IRON_COUNT, o, "iron");
@@ -82,6 +82,7 @@ bool loadConfig(const std::string& path) {
         setIf(ORE_SILVER_COUNT, o, "silver");
         setIf(ORE_LEAD_COUNT, o, "lead");
     }
+    setIf(ORE_INFINITE, j, "ore_infinite");
     setIf(ORE_DEPOSIT_AMOUNT, j, "ore_deposit_amount");
 
     // ---- 采矿场参数（范围/速率，个每秒） ----

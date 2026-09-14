@@ -98,7 +98,7 @@ void Game::generateTerrain() {
 }
 
 // ---------------------------------------------------------------------
-// 矿点生成（固定种子42，8种矿石全图随机混布、避开路径、互不重叠、有限储量）
+// 矿点生成（固定种子42，8种矿石全图随机混布、避开路径、互不重叠；储量模式见 cfg::ORE_INFINITE）
 // ---------------------------------------------------------------------
 void Game::generateOreDeposits() {
     std::mt19937 rng(cfg::ORE_RANDOM_SEED);
@@ -116,7 +116,7 @@ void Game::generateOreDeposits() {
             if (placed.count({x, y})) continue;                               // 不与其他矿重叠
             const auto e = reg.create();
             reg.emplace<GridPos>(e, x, y);
-            reg.emplace<OreDeposit>(e, type, cfg::ORE_DEPOSIT_AMOUNT);        // 有限储量
+            reg.emplace<OreDeposit>(e, type, cfg::ORE_DEPOSIT_AMOUNT);        // 初始储量（无限模式不消耗）
             placed.insert({x, y});
             ok++;
         }

@@ -4,7 +4,7 @@
 //
 // Bucket:        储物桶，FIFO先进先出，按输出间隔定时向OUTPUT面输送
 // SplitterQueue: 分流器内部队列（自动链接四邻，智能轮询均分到可用出口）
-// OreDeposit:    矿点标记（有限储量，采尽消失）
+// OreDeposit:    矿点标记（储量模式见 cfg::ORE_INFINITE：默认无限；有限时采尽消失）
 // =====================================================================
 #include <cstdint>
 #include <deque>
@@ -35,8 +35,8 @@ struct SplitterQueue {
     bool isFull() const { return static_cast<int>(queue.size()) >= cfg::SPLITTER_MAX_QUEUE; }
 };
 
-/// 矿点组件（有限储量：采尽后矿点消失）
+/// 矿点组件（储量模式见 cfg::ORE_INFINITE：默认无限开采，有限时采尽后矿点消失）
 struct OreDeposit {
     cfg::ItemType type = cfg::ItemType::IronOre; // 矿种
-    int amount = cfg::ORE_DEPOSIT_AMOUNT;        // 剩余储量（个）
+    int amount = cfg::ORE_DEPOSIT_AMOUNT;        // 剩余储量（无限模式不消耗）
 };
