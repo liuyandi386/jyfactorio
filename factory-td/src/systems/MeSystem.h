@@ -1,9 +1,9 @@
 #pragma once
 // =====================================================================
-// MeSystem.h —— AE2 式存储物流系统（后期科技）
+// MeSystem.h —— 通物网络存储物流系统（后期科技）
 //
-// 前期用物品管道（EnderIO/Pipez 式，PipeSystem）；
-// 后期用 ME 网络（AE2 式）：物品作为"数据"存入网络，全网共享。
+// 前期用物品管道（PipeSystem，逐段运输）；
+// 后期用通物网络：物品作为"数据"存入网络，全网共享。
 //
 //   方块          | 作用
 //   MeInterface  | 桥接器：从相邻管道/分流器吸入物品入网；
@@ -19,7 +19,7 @@
 #include <vector>
 #include "Game.h"
 
-/// 一个 ME 网络的存储（全网物品共享）
+/// 一个通物网络的存储（全网物品共享）
 struct MeNetwork {
     std::unordered_map<cfg::ItemType, int> items; // 物品类型 → 数量
     int totalItems = 0;                           // 物品总数
@@ -32,7 +32,7 @@ struct MeNetwork {
 
 class MeSystem {
 public:
-    /// 标记网络拓扑待重建（放置/拆除ME设备或加载存档后调用）
+    /// 标记网络拓扑待重建（放置/拆除通物设备或加载存档后调用）
     static void markDirty() { dirty_ = true; }
 
     /// 重建网络（行主序BFS，编号确定）

@@ -19,6 +19,7 @@
 #include "Camera.h"
 #include "AssetManager.h"
 #include "systems/PowerSystem.h"
+#include "systems/TutorialSystem.h"
 #include "components/Position.h"
 #include "components/FaceConfig.h"
 #include "components/Building.h"
@@ -68,17 +69,33 @@ enum class WaveState : uint8_t {
 };
 
 // ---------------------------------------------------------------------
+// 游戏模式（两种模式完全独立，互不嵌套）
+// ---------------------------------------------------------------------
+//   Normal   —— 普通关卡：常规塔防流程，不带任何新手引导介入
+//   Tutorial —— 新手教程：独立的教学关卡，由主菜单「新手教程」按钮进入
+//
+// 由 main.cpp 在创建 Game 时确定，整局不可变；各系统据此决定是否接入引导层。
+enum class GameMode : uint8_t {
+    Normal,
+    Tutorial
+};
+
+// ---------------------------------------------------------------------
 // 游戏主控
 // ---------------------------------------------------------------------
 class Game {
 public:
-    Game();
+    /// mode 决定本局走「普通关卡」还是「新手教程」流程（默认普通关卡）
+    explicit Game(GameMode mode = GameMode::Normal);
     ~Game();
 
     /// 游戏主循环（main.cpp调用）
     void run();
 
     // ================= 核心数据 =================
+    GameMode mode = GameMode::Normal; // 本局模式（构造时确定，两种模式互不嵌套）
+    /// 是否新手教程模式
+    bool isTutorial() const { return mode == GameMode::Tutorial; }
     entt::registry reg;              // ECS注册表（SoA布局，views批量查询）
     Grid grid{cfg::GRID_WIDTH, cfg::GRID_HEIGHT};
     std::vector<uint8_t> terrain;    // 0草地 1路径（与Python tiles一致）
@@ -117,6 +134,7 @@ public:
     /// 暂停面板选择「返回主界面」后置 true：run() 退出，main.cpp 重新进入启动入口系统
     bool returnToMenu = false;
     std::array<bool, 4> keys{};      // WASD按键状态
+    tutorial::State tutorial;        // 新手引导进度（仅教程模式使用；普通关卡恒为空）
 
     // ================= 建筑放置 =================
     /// 检查资源是否足够（成本表来自BUILDING_INFOS）
@@ -134,6 +152,9 @@ public:
                                bool deduct = true);
     /// 拆除建筑并返还成本
     void removeBuilding(entt::entity e, bool refund = true);
+    /// 移动建筑到新格（1×1；采矿场"固定矿点模式"吸附到矿点旁时使用）
+    /// 目标格不可放置时保持原位并返回 false；成功返回 true
+    bool moveBuilding(entt::entity e, int tx, int ty);
     /// 选择建筑（同步UI按钮高亮）
     void selectBuilding(cfg::BuildingType t);
     /// 用指定方向放置建筑（方向悬浮窗回调）

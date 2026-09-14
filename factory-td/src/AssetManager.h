@@ -31,7 +31,8 @@ public:
 
     // ---- 贴图键生成辅助 ----
     static std::string towerKey(cfg::TurretType t, int dir8);   // 塔8方向
-    static std::string machineKey(const char* name, int dir, bool rotated); // 机器4方向
+    /// 机器4方向键（dir 即逻辑朝向；rotated 为历史遗留参数，已不影响映射）
+    static std::string machineKey(const char* name, int dir, bool rotated = true);
     static std::string oreKey(cfg::ItemType t);                 // 矿石
     static std::string enemyKey(cfg::EnemyType t);              // 敌人
 

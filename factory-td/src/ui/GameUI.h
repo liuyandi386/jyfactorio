@@ -34,11 +34,21 @@ public:
     // ---- 场景接口 ----
     void selectBuilding(cfg::BuildingType t);
     void showToast(const std::string& msg);
+    /// 织女星通讯 / 开发日志（叙事层）：独立通道，不会被系统提示挤掉
+    void showComms(const std::string& speaker, const std::string& text);
+    /// 是否有通讯正在显示（调试 / 自检用）
+    bool commsActive() const { return commsTimer_ > 0.0f; }
     void showDirectionPopup(cfg::BuildingType b, sf::Vector2i tile, sf::Vector2f screen);
     bool directionPopupActive() const { return popupActive_; }
     void hideDirectionPopup();
     void setTooltip(const std::string& title, const std::vector<std::string>& lines);
     void clearTooltip() { tooltipActive_ = false; }
+
+    /// 某建筑按钮的屏幕矩形（新手引导高亮目标用；未布局时宽高为 0）
+    sf::FloatRect machineButtonRect(cfg::BuildingType t) const {
+        const size_t i = static_cast<size_t>(t);
+        return i < machineRects_.size() ? machineRects_[i] : sf::FloatRect{};
+    }
 
     /// 组装机配方选择菜单（右键组装机打开；选定后只按该配方合成，可重复选择）
     void showRecipePopup(entt::entity e, sf::Vector2f screen);
@@ -51,7 +61,7 @@ public:
     /// 随身工作台（泰拉瑞亚/MC式手工合成，B键外的V键）
     void toggleWorkbench();
     bool workbenchOpen() const { return workbenchOpen_; }
-    /// 关闭商店/工作台/世界地图/ME面板（ESC）
+    /// 关闭商店/工作台/世界地图/通物面板（ESC）
     void closePanels() {
         shopOpen_ = false;
         workbenchOpen_ = false;
@@ -60,13 +70,14 @@ public:
         mePanelEntity_ = entt::null;
         filterPanelActive_ = false;
         filterPanelEntity_ = entt::null;
+        minerPanelEntity_ = entt::null;
         helpOpen_ = false;
     }
 
     /// 是否有任何面板正打开（ESC 用它决定"先关面板"还是"开暂停面板"）
     bool anyPanelOpen() const {
         return shopOpen_ || workbenchOpen_ || worldMapOpen_ || mePanelActive_ ||
-               filterPanelActive_ || helpOpen_ || recipePopupActive_;
+               filterPanelActive_ || minerPanelActive() || helpOpen_ || recipePopupActive_;
     }
 
     /// 游戏说明书 / 新手引导（H 或 F1 打开；新档首次进入自动弹出）
@@ -90,14 +101,19 @@ public:
     void toggleWorldMap();
     bool worldMapOpen() const { return worldMapOpen_; }
 
-    /// ME网络物品清单（右键任意ME设备打开，AE2终端式）
+    /// 通物网络物品清单（右键任意通物设备打开，通物终端式）
     void showMePanel(entt::entity e);
     void hideMePanel() { mePanelActive_ = false; mePanelEntity_ = entt::null; }
 
-    /// ME接口过滤面板（右键接口打开：点选锁定输出物品）
+    /// 通物接口过滤面板（右键接口打开：点选锁定输出物品）
     void showFilterPanel(entt::entity e);
     void hideFilterPanel() { filterPanelActive_ = false; filterPanelEntity_ = entt::null; }
     bool filterPanelActive() const { return filterPanelActive_; }
+
+    /// 采矿场设置面板（右键矿机打开）：切换采集模式 / 选择矿种 / 旋转输出面
+    void showMinerPanel(entt::entity e);
+    void hideMinerPanel() { minerPanelEntity_ = entt::null; }
+    bool minerPanelActive() const { return minerPanelEntity_ != entt::null; }
 
     /// 重新计算布局（窗口缩放/最大化后调用，按钮与面板跟随窗口尺寸）
     void updateLayout();
@@ -111,6 +127,7 @@ private:
     bool handleBackpackClick(sf::Vector2f pos);
     void handleFaceEditorClick(sf::Vector2f pos);
     void handleFilterPanelClick(sf::Vector2f pos);
+    void handleMinerPanelClick(sf::Vector2f pos);
     void handleHelpClick(sf::Vector2f pos);
 
     // ---- 暂停面板 ----
@@ -125,6 +142,7 @@ private:
     void drawResourceBar(sf::RenderTarget& rt);
     void drawSidePanel(sf::RenderTarget& rt);
     void drawToast(sf::RenderTarget& rt);
+    void drawComms(sf::RenderTarget& rt);
     void drawDirectionPopup(sf::RenderTarget& rt);
     void drawRecipePopup(sf::RenderTarget& rt);
     void drawShop(sf::RenderTarget& rt);
@@ -133,6 +151,8 @@ private:
     void drawFaceEditor(sf::RenderTarget& rt);
     void drawMePanel(sf::RenderTarget& rt);
     void drawFilterPanel(sf::RenderTarget& rt);
+    void drawMinerPanel(sf::RenderTarget& rt);
+    void layoutMinerPanel();
     void drawHelp(sf::RenderTarget& rt);
     void layoutHelp();
     void drawPausePanel(sf::RenderTarget& rt);   // 暂停面板（最顶层模态）
@@ -171,6 +191,11 @@ private:
     std::string toast_;
     float toastTimer_ = 0.0f;
 
+    // 织女星通讯条（叙事层：台词 / 开发日志）
+    std::string commsSpeaker_;   // 说话人（织女星 / 开发日志）
+    std::string commsText_;
+    float commsTimer_ = 0.0f;
+
     // 方向悬浮窗
     bool popupActive_ = false;
     cfg::BuildingType popupBuilding_ = cfg::BuildingType::TowerBasic;
@@ -206,16 +231,25 @@ private:
     float minimapTimer_ = 0.0f;     // 小地图重建节流
     sf::View uiView_;               // UI绘制视图（窗口尺寸变化时更新）
 
-    // ME网络物品清单面板
+    // 通物网络物品清单面板
     bool mePanelActive_ = false;
     entt::entity mePanelEntity_ = entt::null;
     sf::FloatRect mePanelRect_{};
 
-    // ME接口过滤面板（点选锁定输出物品）
+    // 通物接口过滤面板（点选锁定输出物品）
     bool filterPanelActive_ = false;
     entt::entity filterPanelEntity_ = entt::null;
     sf::FloatRect filterPanelRect_{};
     std::array<sf::FloatRect, cfg::ITEM_COUNT> filterRects_{};
+
+    // 采矿场设置面板（右键矿机：模式切换 / 矿种选择 / 旋转输出面）
+    //   非 entt::null 即打开；布局在 layoutMinerPanel() 中按面板矩形计算
+    entt::entity minerPanelEntity_ = entt::null;
+    sf::FloatRect minerPanelRect_{};
+    std::array<sf::FloatRect, 2> minerModeRects_{};                 // 0=原有模式 1=固定矿点模式
+    std::array<sf::FloatRect, 8> minerOreRects_{};                  // 8 种矿石筛选按钮
+    sf::FloatRect minerRotateRect_{};                               // 旋转输出面
+    sf::FloatRect minerCloseRect_{};                                // 关闭
 
     // 游戏说明书 / 新手引导（H / F1，新档自动弹出）
     sf::FloatRect helpBtn_{};               // 顶部「帮助」按钮
@@ -232,5 +266,5 @@ private:
     int pauseFocus_ = 0;                    // 主菜单焦点行
     int pauseSettingRow_ = 0;               // 设置子页焦点行
     std::array<sf::FloatRect, 4> pauseRects_{};                  // 主菜单 4 项
-    std::array<sf::FloatRect, gset::SETTING_ROW_COUNT> pauseSettingRects_{}; // 设置 6 行
+    std::array<sf::FloatRect, gset::SETTING_ROW_COUNT> pauseSettingRects_{}; // 设置子页各行矩形
 };

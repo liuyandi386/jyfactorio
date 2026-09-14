@@ -4,10 +4,12 @@
 //
 // 由启动菜单修改，持久化在 saves/settings.json；
 // 启动时最先读取，然后据此创建窗口并影响若干游戏内表现
-// （悬停提示 / 新手引导 / 摄像机速度）。
+// （悬停提示 / 摄像机速度 / 帧率·垂直同步）。
 //
 // ⚠ 窗口创建统一走 applyToWindow()：全屏一律用"无边框窗口"实现，
 //   绝不要用 sf::Style::Fullscreen（独占全屏），原因见 applyToWindow 注释。
+// ⚠ 帧率/垂直同步统一走 applyFrameMode()：绝不要在其他地方直接调用
+//   setFramerateLimit / setVerticalSyncEnabled（两者互相排斥，原因见 applyFrameMode）。
 // =====================================================================
 #include <string>
 #include <SFML/Graphics/RenderWindow.hpp>
@@ -31,12 +33,26 @@ enum class CameraSpeed : int {
     Count
 };
 
+/// 帧率 / 垂直同步模式（高刷新率显示器适配的核心开关）
+///
+/// 背景：SFML 里 setVerticalSyncEnabled 与 setFramerateLimit 是**互斥**的——
+/// setFramerateLimit(n>0) 内部会关掉垂直同步，setVerticalSyncEnabled(true) 内部会把
+/// 帧率上限清零。所以只能"二选一"，且必须按固定顺序设置（见 applyFrameMode）。
+enum class FrameMode : int {
+    Vsync     = 0,  // 垂直同步：帧率跟随显示器刷新率(60/120/144/165…)，无撕裂（推荐/默认）
+    Limit60   = 1,  // 固定 60 帧上限（不启用垂直同步）
+    Limit120  = 2,  // 固定 120 帧上限
+    Limit144  = 3,  // 固定 144 帧上限
+    Unlimited = 4,  // 不限制，跑满 CPU/GPU（可能撕裂）
+    Count
+};
+
 /// 用户设置（默认值与游戏内置默认一致）
 struct Settings {
     DisplayMode displayMode = DisplayMode::Window1280x720; // 显示模式
     bool showTooltips = true;                              // 悬停建筑信息浮窗
-    bool autoOpenHelp = true;                              // 新开局自动弹出说明书
     CameraSpeed cameraSpeed = CameraSpeed::Normal;         // 摄像机移动速度
+    FrameMode frameMode = FrameMode::Vsync;                // 帧率/垂直同步
 };
 
 /// 全局唯一设置实例
@@ -58,6 +74,8 @@ bool borderless();             // 是否"无边框全屏"（铺满屏幕，但�
 float cameraSpeedScale();      // 慢0.6 / 标准1.0 / 快1.6
 /// 显示模式的中文名（设置界面显示用）
 const char* displayModeName(DisplayMode m);
+/// 帧率/垂直同步模式的中文名（设置界面显示用）
+const char* frameModeName(FrameMode m);
 
 // ---------------------------------------------------------------------
 // 设置项（启动菜单「设置」界面 与 游戏内暂停面板「设置」共用同一份定义）
@@ -66,7 +84,11 @@ const char* displayModeName(DisplayMode m);
 /// 设置界面总行数：4 项设置 + 「恢复默认设置」+ 「返回」
 constexpr int SETTING_ROW_COUNT = 6;
 
-/// 行标题（0 显示模式 / 1 悬停提示 / 2 新手引导 / 3 摄像机速度 /
+/// 「帧率 / 垂直同步」所在行号。该行改动**不需要重建窗口**，调用方就地调用
+/// applyFrameMode(window) 即可生效（启动菜单与暂停面板两处都按此常量判断，勿写死数字）。
+constexpr int SETTING_ROW_FRAME_MODE = 3;
+
+/// 行标题（0 显示模式 / 1 悬停提示 / 2 摄像机速度 / 3 帧率·垂直同步 /
 ///           4 恢复默认设置 / 5 返回）
 const char* settingRowLabel(int row);
 
@@ -98,5 +120,18 @@ SettingActivate activateSettingRow(int row);
 ///   在部分驱动/多显示器/DPI 缩放下表现为反复黑屏闪烁 + 鼠标异常滑动。
 /// - titleUtf8 传 UTF-8 编码的窗口标题
 void applyToWindow(sf::RenderWindow& window, const std::string& titleUtf8);
+
+/// 按当前「帧率/垂直同步」设置应用呈现策略（窗口创建后、以及设置项改动后调用）。
+///
+/// ⚠ 这是全项目**唯一**允许调用 setVerticalSyncEnabled / setFramerateLimit 的地方：
+///   两个接口在 SFML 内部互相排斥（开限帧会关垂直同步，开垂直同步会清限帧），
+///   分散调用会导致"设置了却没生效"，也是高刷新率显示器上画面异常/撕裂的常见来源。
+///
+/// - Vsync     → 垂直同步：144Hz 屏自动跑 144 帧，且不会撕裂；
+///               垂直同步由驱动/合成器按显示器节奏阻塞，不存在"睡眠式限帧"带来的
+///               交换链饥饿（表现为黑屏/卡成幻灯片）。
+/// - LimitNNN  → 关垂直同步 + 固定帧率上限（老机器/录像用，会撕裂）。
+/// - Unlimited → 两者都关，跑满。
+void applyFrameMode(sf::RenderWindow& window);
 
 } // namespace gset

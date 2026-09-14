@@ -3,6 +3,7 @@
 // 使用 nlohmann/json：保存/加载全部游戏数据（建筑/物品/敌人/电网/配方）。
 // =====================================================================
 #include "SaveSystem.h"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -38,8 +39,8 @@ bool hasSave() {
 // ---------------------------------------------------------------------
 bool saveGame(Game& g) {
     try {
-        // 保存前刷新ME网络拓扑，确保 me_networks 是最新状态
-        // （刚放置ME设备后立即存档时，网络可能还挂着脏标记未重建）
+        // 保存前刷新通物网络拓扑，确保 me_networks 是最新状态
+        // （刚放置通物设备后立即存档时，网络可能还挂着脏标记未重建）
         MeSystem::rebuildNetworks(g);
         json j;
         j["v"] = 1;
@@ -60,6 +61,20 @@ bool saveGame(Game& g) {
         j["machines"] = std::move(mach);
         j["cam_x"] = g.camera.x;      // 摄像机位置
         j["cam_y"] = g.camera.y;
+
+        // ---- 新手引导进度（分步教学：完成步骤/耗时/误操作，供继续游戏续接） ----
+        {
+            json tj;
+            tj["active"] = g.tutorial.active;
+            tj["skipped"] = g.tutorial.skipped;
+            tj["finished"] = g.tutorial.finished;
+            tj["step"] = g.tutorial.step;
+            tj["mistakes"] = g.tutorial.mistakes;
+            tj["total_elapsed"] = g.tutorial.totalElapsed;
+            tj["done"] = g.tutorial.done;             // 每步是否完成
+            tj["step_times"] = g.tutorial.stepTimes;  // 每步耗时（学习进度参考）
+            j["tutorial"] = std::move(tj);
+        }
 
         // ---- 矿点（先保存，加载时先恢复以便矿机定位；含有限储量） ----
         j["ores"] = json::array();
@@ -95,6 +110,12 @@ bool saveGame(Game& g) {
                     bj["level"] = m.level;
                     bj["void"] = m.voidMiner;
                     bj["acc"] = m.acc;
+                    // 采集模式（原有模式 / 固定矿点模式）+ 矿种筛选 + 矿点绑定
+                    bj["fixed_ore"] = m.fixedOre;
+                    bj["ore_filter"] = ItemSystem::key(m.oreFilter);
+                    bj["has_bound"] = m.hasBound;
+                    bj["bound_x"] = m.boundX;
+                    bj["bound_y"] = m.boundY;
                     // 采矿机库存（已开采未输出的矿石也必须保存）
                     bj["items"] = itemsToJson(g.reg.get<Inventory>(e).items);
                     break;
@@ -146,7 +167,7 @@ bool saveGame(Game& g) {
                     break;
                 }
                 default:
-                    break;   // 电线/管道/电线杆/ME存储/ME终端：无额外状态
+                    break;   // 电线/管道/电线杆/通物存储/通物终端：无额外状态
             }
             // 面配置（所有带 FaceConfig 的建筑统一保存：采矿机/熔炉/合金炉/
             // 组装机/发电机/储物桶/电线等——右键旋转过的面必须保留）
@@ -168,7 +189,7 @@ bool saveGame(Game& g) {
             j["pipes"].push_back(cj);
         }
 
-        // ---- ME网络存储（按网络编号顺序；编号行主序确定，读档可复现） ----
+        // ---- 通物网络存储（按网络编号顺序；编号行主序确定，读档可复现） ----
         j["me_networks"] = json::array();
         for (const auto& net : MeSystem::networks()) {
             json items = json::object();
@@ -253,6 +274,14 @@ bool loadGame(Game& g) {
                     m.level = bj.value("level", m.level);
                     m.voidMiner = bj.value("void", m.voidMiner);
                     m.acc = bj.value("acc", 0.0f);
+                    // 采集模式/矿种/绑定矿点：旧存档没有这些键 → 默认回到"原有模式"
+                    // （位置与朝向直接沿用存档值，不做吸附，避免读档后建筑乱跑）
+                    m.fixedOre = bj.value("fixed_ore", false) && !m.voidMiner;
+                    if (auto o = ItemSystem::parse(bj.value("ore_filter", "iron_ore")))
+                        m.oreFilter = *o;
+                    m.hasBound = bj.value("has_bound", false);
+                    m.boundX = bj.value("bound_x", -1);
+                    m.boundY = bj.value("bound_y", -1);
                     auto& inv = g.reg.get<Inventory>(e);
                     // 注意：value() 必须绑定一次再取 begin/end，
                     // 否则两个临时对象的迭代器悬空（读档崩溃丢数据的元凶）
@@ -316,7 +345,7 @@ bool loadGame(Game& g) {
                     break;
                 }
                 default:
-                    break;   // 电线/管道/电线杆/ME存储/ME终端：无额外状态
+                    break;   // 电线/管道/电线杆/通物存储/通物终端：无额外状态
             }
             // 面配置统一恢复（采矿机/熔炉/合金炉/组装机/发电机/储物桶/电线等）
             if (g.reg.all_of<FaceConfig>(e) && bj.contains("faces")) {
@@ -342,7 +371,7 @@ bool loadGame(Game& g) {
                     pbuf.push_back(*t);
         }
 
-        // ---- 3.5 ME网络存储恢复（重建网络后按编号回填，容量截断） ----
+        // ---- 3.5 通物网络存储恢复（重建网络后按编号回填，容量截断） ----
         MeSystem::rebuildNetworks(g);
         const auto& netsArr = j.value("me_networks", json::array());
         for (size_t i = 0; i < netsArr.size() && i < MeSystem::networks().size(); ++i) {
@@ -396,6 +425,29 @@ bool loadGame(Game& g) {
         const json& machJson = j.value("machines", json::array());
         for (int i = 0; i < static_cast<int>(machJson.size()) && i < cfg::BUILDING_COUNT; ++i)
             g.backpackMachines[static_cast<size_t>(i)] = machJson[static_cast<size_t>(i)].get<int>();
+
+        // ---- 6. 新手引导进度 ----
+        if (j.contains("tutorial")) {
+            const json& tj = j["tutorial"];
+            g.tutorial.finished = tj.value("finished", false);
+            g.tutorial.skipped = tj.value("skipped", false);
+            g.tutorial.mistakes = tj.value("mistakes", 0);
+            g.tutorial.totalElapsed = tj.value("total_elapsed", 0.0f);
+            g.tutorial.done = tj.value("done", std::vector<uint8_t>{});
+            g.tutorial.stepTimes = tj.value("step_times", std::vector<float>{});
+            g.tutorial.step = tj.value("step", 0);
+            g.tutorial.active = tj.value("active", false);
+        }
+        // 脚本步数变化时补齐数组，避免越界（版本升级安全）
+        {
+            const int n = tutorial::stepCount();
+            g.tutorial.done.resize(static_cast<size_t>(n), 0);
+            g.tutorial.stepTimes.resize(static_cast<size_t>(n), 0.0f);
+            g.tutorial.step = std::clamp(g.tutorial.step, 0, n);
+        }
+        g.tutorial.progressCounter = 0;
+        g.tutorial.stepElapsed = 0.0f;
+        g.tutorial.moveAccum = 0.0f;
 
         g.power.dirty = true;   // 重建电网拓扑
         return true;

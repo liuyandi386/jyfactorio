@@ -18,22 +18,28 @@ namespace cfg {
 // ================= 窗口设置 (config.py) =================
 inline constexpr int SCREEN_WIDTH  = 1280;   // 窗口宽
 inline constexpr int SCREEN_HEIGHT = 720;    // 窗口高
-inline constexpr const char* SCREEN_TITLE = "Factorio风格塔防游戏 (C++重构版) v1.3.2";
+inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.3";
 
 // ================= 地图设置 =================
 inline constexpr int TILE_SIZE  = 32;    // 瓦片像素尺寸（Python一致）
 inline constexpr int GRID_WIDTH  = 200;  // 网格宽（Python为50，按需求扩到200）
 inline constexpr int GRID_HEIGHT = 200;  // 网格高
 
-// ================= 摄像机设置 =================
-inline constexpr float CAMERA_SPEED = 5.0f;   // WASD移动速度(像素/帧)
+// ================= 摄像机设置（全部以「秒」为单位，与帧率无关） =================
+// ⚠ 这两个值曾经是"每帧"单位（5 像素/帧、每帧插值 0.1）。那套写法只在锁 60 帧时正确，
+//   一旦开启垂直同步在高刷屏上跑 144 帧，摄像机就会快 2.4 倍。现在统一改成每秒速率：
+//     5   像素/帧 × 60 帧/秒 = 300 像素/秒
+//     0.1 每帧插值          → 指数平滑速率 6 /秒（60 帧下每帧系数≈0.095，手感一致）
+inline constexpr float CAMERA_SPEED_PER_SEC = 300.0f;  // WASD移动速度(像素/秒)
 inline constexpr float ZOOM_MIN     = 0.5f;   // 最小缩放
 inline constexpr float ZOOM_MAX     = 2.0f;   // 最大缩放
 inline constexpr float ZOOM_SPEED   = 0.1f;   // 滚轮单次缩放步长
-inline constexpr float CAMERA_SMOOTH = 0.1f;  // 平滑插值系数(每帧)
+inline constexpr float CAMERA_SMOOTH_RATE = 6.0f;      // 平滑插值速率(1/秒)
 
 // ================= 游戏设置 =================
-inline constexpr int FPS           = 60;      // 帧率上限
+// 「固定 60 帧」档使用的上限；实际帧率策略见 Settings.h 的 gset::FrameMode
+// （默认垂直同步，跟随显示器刷新率，144Hz 屏即 144 帧）
+inline constexpr int FPS           = 60;
 // 以下标有"JSON可调"的变量运行时会被 assets/config.json 覆盖（改数值无需重编译）
 inline int INITIAL_GOLD  = 500;     // 初始金币（击杀敌人获得）  [JSON可调]
 inline int INITIAL_LIVES = 10;      // 初始生命（敌人抵达终点-1） [JSON可调]
@@ -312,13 +318,13 @@ enum class BuildingType : uint8_t {
     PowerGenerator, // 燃煤发电机（工业EU）
     Capacitor,    // 电容库
     PowerWire,    // 电力线缆
-    Pipe,         // 物品管道（自动链接四邻，AE2式即时路由）
+    Pipe,         // 物品管道（自动链接四邻，即时路由）
     Bucket,       // 储物桶
     Splitter,     // 物品分流器
     AlloyFurnace, // 合金炉（16EU/s + 锭→合金）——追加在末尾，保持旧存档类型索引不变
-    MeInterface,  // ME接口（AE2式：物品进出网络）
-    MeDrive,      // ME存储单元（网络容量）
-    MeTerminal,   // ME终端（查看全网物品）
+    MeInterface,  // 通物接口（物品进出网络）
+    MeDrive,      // 通物存储单元（网络容量）
+    MeTerminal,   // 通物终端（查看全网物品）
     COUNT
 };
 inline constexpr int BUILDING_COUNT = static_cast<int>(BuildingType::COUNT);
@@ -349,9 +355,9 @@ inline std::array<BuildingInfo, BUILDING_COUNT> BUILDING_INFOS = {{
     {"储物桶",     "5", {{ItemType::IronOre,5}},                            true },
     {"分流器",     "\\",{{ItemType::IronOre,8},{ItemType::CopperOre,5}},   false },
     {"合金炉",     "",  {{ItemType::IronOre,80},{ItemType::CopperOre,40},{ItemType::CircuitBoard,8}}, true },
-    {"ME接口",     "",  {{ItemType::IronIngot,20},{ItemType::CopperIngot,10},{ItemType::CircuitBoard,4}}, false },
-    {"ME存储单元", "",  {{ItemType::IronIngot,10},{ItemType::CopperIngot,5},{ItemType::CircuitBoard,8},{ItemType::SteelIngot,2}}, false },
-    {"ME终端",     "",  {{ItemType::IronIngot,5},{ItemType::CopperIngot,5},{ItemType::CircuitBoard,4}}, false },
+    {"通物接口",     "",  {{ItemType::IronIngot,20},{ItemType::CopperIngot,10},{ItemType::CircuitBoard,4}}, false },
+    {"通物存储单元", "",  {{ItemType::IronIngot,10},{ItemType::CopperIngot,5},{ItemType::CircuitBoard,8},{ItemType::SteelIngot,2}}, false },
+    {"通物终端",     "",  {{ItemType::IronIngot,5},{ItemType::CopperIngot,5},{ItemType::CircuitBoard,4}}, false },
 }};
 
 // ================= 合金炉参数 =================
@@ -360,7 +366,7 @@ inline int   ALLOY_MAX_SLOTS = 6;          // 合金炉库存槽数          [JS
 inline int   ALLOY_MAX_STACK = 64;         // 单槽堆叠                [JSON可调]
 inline int   ALLOY_FURNACE_ITEM_CAP = 128; // 合金炉每种原料缓存上限  [JSON可调]
 
-// ================= ME网络（AE2式存储物流，后期科技） =================
+// ================= 通物网络（存储物流，后期科技） =================
 inline float ME_TRANSFER_INTERVAL = 0.25f; // 网络转移间隔(秒)        [JSON可调]
 inline int   ME_IMPORT_PER_TICK   = 16;    // 每接口每周期入网物品数  [JSON可调]
 inline int   ME_EXPORT_PER_TICK   = 4;     // 每接口每周期出网物品数  [JSON可调]
@@ -403,6 +409,7 @@ inline constexpr int BUTTON_HEIGHT      = 32;    // 建筑按钮高
 inline constexpr int BUTTON_SPACING     = 5;     // 按钮间距
 inline constexpr int BUTTON_TOP         = 60;    // 按钮区起始y
 inline constexpr float TOAST_DURATION   = 3.0f;  // 弹窗提示时长(秒)
+inline constexpr float COMMS_DURATION   = 6.5f;  // 织女星通讯条停留时长(秒)
 } // namespace ui
 
 // ================= 面配置（格雷科技九宫格简化版） =================

@@ -1,5 +1,5 @@
 # =====================================================================
-# factory-td —— 《异星工厂》风格自动化塔防游戏 (C++20 + SFML 2.6 + EnTT)
+# 织星计划 (Project Weavestar) —— 自动化工厂塔防游戏 (C++20 + SFML 2.6 + EnTT)
 # 由 Python/Pygame 版本重构移植而来
 #
 # 依赖获取支持三种方式（自动探测）：
@@ -98,6 +98,8 @@ add_executable(factory-td
     src/systems/EnemySystem.cpp
     src/systems/ItemSystem.cpp
     src/systems/PlayerSystem.cpp
+    src/systems/TutorialSystem.cpp
+    src/systems/Narrative.cpp
     src/systems/RenderSystem.cpp
     src/ui/EntrySystem.cpp
     src/ui/GameUI.cpp

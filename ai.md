@@ -1,17 +1,58 @@
 # AI 交接文档（游戏全部知识）
 
-> 写于 2026-08-25，最近更新 2026-09-13（**Alpha v1.3.2 已发布**，见 §0）。本文档是"换一个 AI 继续开发"的完整交接材料：
+> 写于 2026-08-25，最近更新 2026-09-14（**Alpha v1.3.3 已发布**，见 §0）。本文档是"换一个 AI 继续开发"的完整交接材料：
 > 项目是什么、做到哪了、怎么做的、坑在哪、还有什么没做。
 > 阅读顺序建议：**0 最近一轮交接** → 1 项目现状 → 3 构建 → 4 架构 → 5 机制 → 8 配置 → 9 存档 → 11 坑 → 12 未完成。
 
 ---
 
-## 0. ★ 最近一轮工作交接（2026-09-13，Alpha v1.3.2 已发布）
+## 0. ★ 最近一轮工作交接（2026-09-14，Alpha v1.3.3 已发布）
 
 > 本节回答两个问题：**我干了啥 / 接下来要干啥**。先看结论：
-> **新增"游戏内暂停面板"（ESC）：继续游戏 / 保存存档 / 设置 / 返回主界面；设置项定义已抽到 `gset` 供启动菜单与暂停面板共用（两处行为一致由代码结构保证）。编译通过（`[100%] Built target factory-td`）、存档自检 21/21、启动冒烟 12s 存活；文档已同步（`update.md` 写入 v1.3.2、`README.md` 补暂停面板、本文 §0 已更新）。唯一遗留仍是「人工实机视觉走查」（暂停面板观感、返回主界面流程），需用户睁眼确认。**
+> **v1.3.3 是一次"品牌 + 教学 + 适配"的大版本，共 6 块：①品牌重塑《异星工厂塔防》→《织星计划 Project Weavestar》（含织女星 AI 人设）；②新增独立的新手教程模式（`systems/TutorialSystem.*`）与叙事播报层（`systems/Narrative.*`）；③设置新增「帧率 / 垂直同步」；④采矿场双模式（原有模式 / 固定矿点模式，右键面板切换）；⑤修复 5 个 bug——机器贴图整体偏左 90°、高刷新率下摄像机与移动速度翻倍、高 DPI 下无边框全屏只占一角、旋转输出面后箭头与输出面错位、固定 60 帧后画面异常；⑥术语去模组化「ME → 通物」。编译通过（`[100%] Built target factory-td`）、`--selftest-save` 21/21、启动冒烟存活；文档已同步（`update.md` 写入 v1.3.3、`README.md` 与本文 §0 已更新）。唯一遗留仍是「人工实机视觉走查」（教程流程、通讯条观感、采矿场设置面板、高刷/高 DPI 表现），需用户睁眼确认。**
 
-### 0.1 干了啥：新增"游戏内暂停面板 + 设置项共用化"（v1.3.2）
+### 0.1 干了啥（v1.3.3，本轮）
+
+**A. 机器贴图方向错位（本版最"值钱"的修复）**
+- 症状：放置采矿场 / 组装机 / 发电机时，贴图里的箭头比实际输出方向**向左偏 90°**。
+- 根因：`AssetManager::machineKey()` 沿用了 Python 版的"逆时针 90°"映射 `(d+3)%4`；而 PNG（`organize_sprites.py` 用 `rotate(-angle)` **顺时针**生成、文件名即朝向）与程序化箭头本来就是"**后缀 == 视觉朝向**"。
+- 修法：`machineKey` 改为 `DIR_NAMES_4[d]`（`rotated` 参数保留但不再参与映射），并**同步** PNG 加载路径 + 程序化箭头绘制的 `texDir`（共 3 处）。
+- 连带一致性核实：放置锚点用的是鼠标格（无贴图偏移）、面配置 `fc.set(dir, OUTPUT)` 与 `b.dir` 同源，所以修复后"**贴图箭头 == 输出面 == 物流口**"三者第一次真正对齐。**塔的 8 方向 `setRotation`、熔炉/合金炉/储物桶的 `_d` 后缀键不受影响，勿顺手改。**
+
+**B. 采矿场双模式（`Machine` 组件 + `MinerSystem` + 右键面板）**
+- `Machine` 新增 `fixedOre / oreFilter / hasBound / boundX,boundY`。
+- **原有模式**（默认）：半径内所有矿点随机采集——与旧版**行为逐字一致**。
+- **固定矿点模式**：吸附到矿点旁边，只采 `oreFilter` 那一个矿点；采尽/矿点消失自动回退到范围内最近的同矿种矿点。
+- **产量规则两种模式完全相同**（同一个 `m.rate`、`while (acc>=1)` 每轮结算 1 个）——这是需求硬约束，改逻辑时别动。
+- `Game::moveBuilding()`：1×1 建筑移动（先注销占格 → 判定地形/占用 → 失败回滚），供"吸附"使用。
+- `GameUI` 新增采矿场设置面板（`showMinerPanel/handleMinerPanelClick/drawMinerPanel/layoutMinerPanel`），右键矿机**不再是"直接旋转"**。
+- `MinerSystem::rotateOutputFace()`：旋转时**同步 `b.dir` 与 `FaceConfig`**（旧版 `FaceConfig::rotate()` 只转面不改 `dir`，是"箭头与输出错位"的第二个根因）。
+
+**C. 新手教程（新增 `systems/TutorialSystem.*`）**
+- 主菜单「新手教程」(`T`) / 「普通关卡」(`N`) **平级**；旧的"新开局自动弹说明书"与 `autoOpenHelp` 设置**已删除**（说明书仍在，`H`/`F1` 手动开）。
+- 章节 / 步骤 / 任务判定 / 耗时统计 / 误操作计数；顶部引导横幅 + 步骤进度 + 跳过按钮；`F2` 引导中=跳过、否则=重开。
+- 进度存 `saves/tutorial.json`，与主存档**完全隔离**（教程内 F5/F9 明确提示"不保存/不读取"，不会覆盖普通关卡存档）。
+- 教程模式**不自动出怪**，敌人由教学步骤手动生成（Z/X/C）。
+
+**D. 叙事层（新增 `systems/Narrative.*`）**
+- 右下角通讯条 `GameUI::showComms`（头像 + 说话人 + 台词，**独立通道**，不会被 Toast 挤掉）。
+- 事件播报：着陆 / 首建 / 首次遇敌 / 首次击杀 / 一波清空 / 防护告急 / 吐槽公司 + 波间开发日志；同事件多条台词**轮换**，里程碑**整局只播一次**；**教程模式不叠加**本模块。
+
+**E. 帧率 / 垂直同步（设置界面第 4 项）**
+- `FrameMode{Vsync, Limit60, Limit120, Limit144, Unlimited}`，落盘 `saves/settings.json`。
+- **唯一应用点 `gset::applyFrameMode()`**：SFML 的 `setVerticalSyncEnabled` 与 `setFramerateLimit` 会**互相拆台**，必须按固定顺序"二选一"。
+
+**F. 显示 / 启动适配**
+- `enableHighDpiAwareness()`：修复 125% / 150% 缩放屏下无边框全屏"只占屏幕一角"。
+- `Camera` 改为**帧率无关**（`CAMERA_SPEED_PER_SEC` / `CAMERA_SMOOTH_RATE` 指数平滑），修复 144Hz 下摄像机与移动速度翻倍。
+- `--safe-mode` / `--windowed` 应急参数（强制 1280×720 窗口化，**不写回**设置文件）。
+
+**G. 术语去模组化**：界面「ME 网络 / 接口 / 终端」→「**通物网络 / 接口 / 终端**」；**内部代码名 `Me*` 与 JSON 键 `me_*` 一律不动**（存档与 `config.json` 零迁移）。
+
+**H. 版本号**：`EntrySystem.cpp` `kVersion` → `v1.3.3  ALPHA BUILD`；`GameConfig.h` `SCREEN_TITLE` → ` v1.3.3`。
+（`package.bat` 用正则从 `GameConfig.h` 抓 `vX.Y.Z` 当包名，所以**只改 `SCREEN_TITLE` 一处即可**，别在 `GameConfig.h` 其它地方塞版本号字符串。）
+
+### 0.1b 上一版（v1.3.2，已完成）：游戏内暂停面板 + 设置项共用化
 
 - **`ui/GameUI.h/.cpp`** 新增暂停面板（ESC 打开）：
   - 全屏变暗 + 居中纵向按钮列：**继续游戏 / 保存存档 / 设置 / 返回主界面**（`drawPausePanel` / `drawPauseMenu`）。
@@ -27,33 +68,38 @@
 - **`systems/PlayerSystem.cpp`**：ESC 语义 = 有面板/面编辑器先关（MC 习惯），否则 `ui->openPausePanel()`。
 - **版本号**：`EntrySystem.cpp` 的 `kVersion` → `v1.3.2  ALPHA BUILD`；`GameConfig.h` 的 `SCREEN_TITLE` 加 ` v1.3.2`。
 
-### 0.1b 上一版（v1.3.1，已完成）：启动入口系统 + 跨场景设置
+### 0.1c 更早（v1.3.1，已完成）：启动入口系统 + 跨场景设置
 
 `ui/EntrySystem.*`：启动动画 → 标题主菜单 → 设置 → 加载预览（真实进度 + 敌人路径/矿点迷你地图），自带独立窗口、结束即销毁；`Settings.h/.cpp`（落盘 `saves/settings.json`）与 `main.cpp` 先 `gset::load()`、`--selftest-save` 保留在入口系统之前。详见 `update.md` 的 Alpha v1.3.1 章节。
 
 ### 0.2 验证到什么程度
 
 - ✅ **编译**：`cmake --build` 得到 `[100%] Built target factory-td`（LTO 的 `ar.exe: plugin needed to handle lto object` 是已知噪音，见 §3.2）。
-- ✅ **存档自检**：`factory-td.exe --selftest-save`（在 `build/` 下运行）→ **21/21 通过**（见 §3.4）。
-- ✅ **启动冒烟**：在 `build/` 下后台运行 exe 12 秒未退出（正常）。
-- ⚠ **人工视觉走查仍未做（唯一遗留，见 0.4-1）**：本 AI 只做了编译/自检/冒烟，无法替代人眼确认暂停面板观感、游戏内改显示模式是否即时重建、返回主界面是否正确回到标题菜单。
+- ✅ **存档自检**：`factory-td.exe --selftest-save`（在 `build/` 下运行）→ **21/21 通过**（见 §3.4）。本版新增的 `fixed_ore / ore_filter / has_bound / bound_x / bound_y` 字段**向后兼容**：旧存档无这些键 → `value(..., default)` 回落为"原有模式"，位置/朝向直接沿用存档值、**不做吸附重排**（避免读档后建筑乱跑）。
+- ✅ **启动冒烟**：在 `build/` 下后台运行 exe 未立即退出（正常）。
+- ⚠ **人工视觉走查仍未做（唯一遗留，见 0.4-1）**：本 AI 只做了编译/自检/冒烟，无法替代人眼确认：新手教程全流程、织女星通讯条观感、采矿场设置面板交互、高刷新率/高 DPI 下的实际手感。**特别是本版修的两个"方向/速度"bug，必须实机看才能确认。**
 
-### 0.3 上一轮的关键坑（已修，勿再犯）
+### 0.3 关键坑（已修，勿再犯）
 
-1. **鼠标悬停每帧夺取键盘焦点**：`EntrySystem` 的悬停命中写成 `if (r.contains(mp)) { settingHover = i; settingRow = i; }` → 指针停住时键盘焦点每帧被弹回该行，↑↓/←→ 形同失效。修法：**只有鼠标真正移动时**才让悬停行接管焦点（记录上一帧鼠标位置做比较），指针停住仅更新高亮；进入设置界面时先同步 `lastMousePos`，避免停住的指针立刻夺焦。**暂停面板的悬停沿用了同一套做法。**
+1. **鼠标悬停每帧夺取键盘焦点**：`EntrySystem` 的悬停命中写成 `if (r.contains(mp)) { settingHover = i; settingRow = i; }` → 指针停住时键盘焦点每帧被弹回该行，↑↓/←→ 形同失效。修法：**只有鼠标真正移动时**才让悬停行接管焦点（记录上一帧鼠标位置做比较），指针停住仅更新高亮；进入设置界面时先同步 `lastMousePos`。**暂停面板的悬停沿用了同一套做法。**
 2. **独占全屏黑屏闪烁 + 鼠标漂移**：全屏改用 `sf::Style::None` + 桌面尺寸 + 贴 (0,0) 的"无边框全屏"，**不调用 `SetDisplayMode`**；并用 `SetWindowPos(HWND_TOPMOST)` 防任务栏遮挡。
 3. **不能在 `pollEvent` 事件循环内重建 SFML 窗口**：显示模式变更一律延后到事件循环之外（`EntrySystem::pendingDisplayApply` / `Game::run` 里的 `ui->consumeDisplayApply()` + `applyDisplayMode()`）。
+4. **v1.3.3 新坑：贴图方向映射不能"照抄 Python"**。Python 版老代码里用的是"逆时针 90°"键表，但**它对应的 PNG 命名规则与该表是配套的**；C++ 版边把 PNG 换成"顺时针生成、文件名即朝向"，却保留了那张逆时针表 → 全部机器贴图偏左 90°。**改动贴图键名/朝向映射前，先 `dir assets/sprites/machines` 确认文件名与箭头方向，再决定映射公式。**
+5. **v1.3.3 新坑：SFML 的 `setVerticalSyncEnabled` 与 `setFramerateLimit` 互相拆台**。同时设置会导致帧率/画面异常。任何帧率相关改动都要走 `gset::applyFrameMode()` 这一个入口（内部按固定顺序二选一），**不要在别处再直接调这两个 setter。**
+6. **v1.3.3 新坑：所有"速度"必须乘 `dt`，所有"平滑"必须用帧率无关形式**。摄像机原先是每帧固定步长，144Hz 下比 60Hz 快 2.4 倍。新写的移动/动画同理。
 
 ### 0.4 接下来要干啥（建议顺序）
 
 1. **人工实机走查（唯一遗留，需用户）**：
-   - 游戏内按 ESC → 暂停面板出现、世界冻结；↑↓/Enter/Esc 与鼠标点击/悬停正常。
-   - 面板「设置」→ 改显示模式（三种，含 1600×900 与无边框全屏）确认**即时重建窗口且不崩**；改悬停提示 / 摄像机速度 / 新手引导后返回游戏确认生效。
-   - 「保存存档」有 Toast；「返回主界面」先保存再回到标题菜单，此时「继续游戏」应能读回刚才进度。
-   - 顺带复测 v1.3.1 遗留：主菜单「↓↓ → Enter 进设置 → →」显示模式循环、鼠标不动时焦点不被夺走、无边框全屏是否铺满 / 任务栏是否被盖住。
-   - 注意本机 DPI 150%，自动化坐标需 ÷1.5（§3.5）。
-2. **可选（先问用户）**：暂停面板是否还要"退出游戏"或"重新开始"？目前只到主菜单。
-3. ~~文档同步~~ → **已完成**（`update.md` v1.3.2、`README.md`、本文 §0）。
+   - **贴图朝向**：放置采矿场，用 `R`/放置方向键切 4 个方向，确认**贴图箭头方向 == 输出面 == 实际物流口**；组装机、发电机同样确认。
+   - **采矿场双模式**：右键矿机 → 面板出现；切「固定矿点模式」确认**吸附到矿点旁**且只采所选矿种；切回「原有模式」确认行为与旧版一致；存档再读档确认位置/朝向/模式/绑定原样恢复；确认两种模式产率一致。
+   - **新手教程**：主菜单「新手教程」→ 引导横幅/步骤/跳过按钮正常，`F2` 跳过与重开；教程内 `F5`/`F9` 有"不保存/不读取"提示；退出教程后普通关卡存档未被污染（`saves/factory_td.json` 与 `saves/tutorial.json` 互不影响）。
+   - **叙事**：着陆/首建/首次遇敌等播报出现，通讯条不被 Toast 挤掉；教程模式下**不叠加**播报。
+   - **帧率设置**：设置界面第 4 项逐个切换（垂直同步/60/120/144/不限制），确认**立即生效且画面不抖**；高刷屏重点看"不限制"与"垂直同步"的手感差异。
+   - **高 DPI**：本机 150% 缩放，确认无边框全屏铺满且不"只占一角"；黑屏时用 `--safe-mode` 救场。
+   - 顺带复测 v1.3.2/v1.3.1 遗留：暂停面板与返回主界面、主菜单设置界面焦点不被夺走。
+2. **可选（先问用户）**：新手教程的文案/步骤数与章节划分是否合适？是否需要"教程内可跳过到任意章节"？
+3. ~~文档同步~~ → **已完成**（`update.md` v1.3.3、`README.md`、本文 §0）。
 
 ---
 
@@ -62,14 +108,14 @@
 - **项目**：Factorio 风格 2D 工厂塔防游戏，C++20 + SFML 2.6 + EnTT 3.13 + nlohmann/json 重构版。
 - **位置**：`D:\JYGAME\jyfactorio\factory-td\`（C++ 主工程）。同目录还有：
   - `python版（老版）\` —— Python/pygame 原始版本（只作对照，不再开发）
-  - `update.md` —— 更新日志（C++ 部分最新 **Alpha v1.3.2**，含各版本功能与修复说明）
+  - `update.md` —— 更新日志（C++ 部分最新 **Alpha v1.3.3**，含各版本功能与修复说明）
   - `README.md` —— 总 README（C++ 在前、Python 在后）
   - `add.txt` —— **用户需求原文（最高优先级需求来源）**
   - `TODO.md` —— 早期遗留 TODO
   - `factory-td\PORTING.md` —— Python→C++ 移植对照表
 - **当前状态**：add.txt 的 ①~⑬ 项需求**全部实现**，编译通过、运行正常；存档系统经过全面修复并有自检验证（21/21 通过）。
-- **当前版本**：**Alpha v1.3.2**（2026-09-13）——新增**游戏内暂停面板（ESC）**；上一版 v1.3.1 为**启动入口系统 + 跨场景用户设置**。
-- **v1.3.2 状态**：新增**游戏内暂停面板**（继续游戏 / 保存存档 / 设置 / 返回主界面，`ui/GameUI.*`）与**设置项共用化**（`gset::settingRow*` / `cycleSettingRow` / `activateSettingRow`，启动菜单与暂停面板共用同一份）。**代码完成、编译通过、存档自检 21/21、启动冒烟通过；文档已同步；唯一遗留是人工实机视觉走查（详见 §0）。**
+- **当前版本**：**Alpha v1.3.3**（2026-09-14）——**品牌重塑《织星计划》+ 新手教程模式 + 叙事播报 + 采矿场双模式 + 贴图/高刷/高DPI 修复**；上一版 v1.3.2 为**游戏内暂停面板 + 设置项共用化**。
+- **v1.3.3 状态**：新增**新手教程独立模式**（`systems/TutorialSystem.*`）、**叙事播报层**（`systems/Narrative.*`）、**采矿场双模式**（`Machine` + `MinerSystem` + `ui/GameUI` 设置面板）、**帧率/垂直同步设置**（`gset::applyFrameMode()`）；修复**机器贴图偏左 90°**（`AssetManager::machineKey`）、**高刷新率速度翻倍**（`Camera` 改 dt）、**高 DPI 无边框全屏只占一角**、**旋转输出面后箭头与输出面错位**（`MinerSystem::rotateOutputFace()`）；术语 **ME → 通物**。**代码完成、编译通过、存档自检 21/21、启动冒烟通过；文档已同步；唯一遗留是人工实机视觉走查（详见 §0）。**
 - ⚠ **文档同步坑（已修复，勿重犯）**：曾出现根目录 `update.md` / `ai.md` 停在 v1.2.1，而开发记录只写进了 `build/update.md` 副本，落后两个版本。**改代码后同步更新根目录 `README.md` / `update.md` / `ai.md`；`build/` 是构建产物目录，不是文档源。**
 - **开发方式**：每改一批代码必须 `cmake --build` 编译验证 + 启动冒烟测试；用户会实际游玩并截图报 bug，报 bug 时先"解析为什么"再修。
 
@@ -92,27 +138,34 @@ factory-td/
 └── src/
     ├── main.cpp          # 入口；支持 --selftest-save 存档往返自检（§3.4）
     ├── GameConfig.h      # ★ 全部数值内置默认值（中文注释，[JSON可调] 标注哪些可被config.json覆盖）
-    ├── Settings.h/.cpp   # ★ 跨场景用户设置（显示模式/悬停提示/新手引导/摄像机速度）→ saves/settings.json
+    ├── Settings.h/.cpp   # ★ 跨场景用户设置（显示模式/悬停提示/摄像机速度/帧率·垂直同步）→ saves/settings.json
     │                     #   + 设置项共用定义 settingRow*/cycleSettingRow/activateSettingRow（见 §0）
-    ├── Game.h/.cpp       # 主控：窗口/网格/地形/矿点/建筑放置拆除/波次/存档接口/update()编排/悬浮提示
+    │                     #   + applyFrameMode()：帧率/垂直同步的【唯一】应用点（VSync 与 limit 二选一）
+    ├── Game.h/.cpp       # 主控：窗口/网格/地形/矿点/建筑放置拆除/移动/波次/存档接口/update()编排/悬浮提示
     │                     #   + returnToMenu（暂停面板返回主界面）/ applyDisplayMode（事件循环外重建窗口）
-    ├── Camera.h/.cpp     # 摄像机（WASD/滚轮缩放0.5~2.0/平滑插值/坐标变换）
+    │                     #   + moveBuilding()（1×1 建筑移动，供采矿场"固定矿点模式"吸附）
+    │                     #   + gameMode（Normal / Tutorial）、enableHighDpiAwareness()
+    ├── Camera.h/.cpp     # 摄像机（WASD/滚轮缩放0.5~2.0/帧率无关指数平滑CAMERA_SPEED_PER_SEC/坐标变换）
     ├── AssetManager.h/.cpp # 贴图+字体加载缓存；程序化生成（地形/熔炉/合金炉/电容/发电机/矿机L2L3虚空/5新矿石）
     ├── ConfigLoader.h/.cpp # config.json 加载器（"存在才覆盖"，缺字段用内置默认值）
     ├── SaveSystem.h/.cpp # JSON 存档（saves/factory_td.json）
     ├── ui/GameUI.h/.cpp  # 暗色工业风HUD：资源栏/建筑按钮/方向悬浮窗/面编辑器/配方菜单/
-    │                     #   说明书·新手引导(H/F1、6标签页)/商店(B)/随身工作台(V)/ME终端面板/
-    │                     #   小地图/世界地图(M)/Toast/悬停提示/暂停面板(ESC：继续·存档·设置·返回主界面)
+    │                     #   说明书(H/F1、6标签页)/商店(B)/随身工作台(V)/通物终端面板/
+    │                     #   小地图/世界地图(M)/Toast/悬停提示/暂停面板(ESC：继续·存档·设置·返回主界面)/
+    │                     #   采矿场设置面板(右键矿机：模式切换/矿种筛选/旋转输出面)/
+    │                     #   教程引导横幅(F2跳过)/织女星通讯条(showComms)
     ├── ui/EntrySystem.h/.cpp # ★ 启动入口：启动动画/标题主菜单/设置/加载预览（自带独立窗口，见 §0）
     ├── systems/          # ECS 系统（见 §4）
     │   ├── PlayerSystem.h/.cpp   # 输入：键盘热键/左键放置/右键交互/摄像机/预览
     │   ├── MachineSystem.h/.cpp  # 采矿机/熔炉/合金炉/组装机生产计时 + 输出推送(机器→桶/管道/分流器/机器/ME)
     │   ├── PowerSystem.h/.cpp    # 电网：发电机燃烧、BFS路由、电容充放、供电判定（EU/秒）
     │   ├── PipeSystem.h/.cpp     # 物品管道：即时路由BFS、分流器、机器拉取原料、连接掩码
-    │   ├── MeSystem.h/.cpp       # AE2式ME网络：网络重建/入网吸入/出网导出（后期物流）
+    │   ├── MeSystem.h/.cpp       # AE2式通物网络：网络重建/入网吸入/出网导出（后期物流；界面称"通物"）
     │   ├── TurretSystem.h/.cpp   # 炮塔索敌射击+子弹
     │   ├── EnemySystem.h/.cpp    # 敌人移动/波次/击杀结算/生成（Z/X/C分键）
     │   ├── ItemSystem.h/.cpp     # 物品键名表/中文名/颜色（JSON存档与配置共用）
+    │   ├── TutorialSystem.h/.cpp # ★ 新手教程（v1.3.3）：章节/步骤/任务判定/进度存 saves/tutorial.json
+    │   ├── Narrative.h/.cpp      # ★ 叙事播报（v1.3.3）：织女星通讯条 + 事件播报 + 波间开发日志
     │   └── RenderSystem.h/.cpp   # 世界渲染（分13层：地形/矿点/建筑精灵/管道/电线/塔/…）
     ├── components/       # 组件头文件
     │   ├── Building.h    # 类型/网格坐标/占地/朝向（所有建筑都有）
@@ -120,7 +173,7 @@ factory-td/
     │   ├── Inventory.h   # 在 Item.h 里！通用库存（槽×堆叠）
     │   ├── Item.h        # ItemType 枚举 + Inventory + ITEM_INFOS 引用
     │   ├── Pipe.h        # 管道：connMask + buffer(deque) + transferTimer
-    │   ├── Me.h          # ME接口/ME存储单元/ME终端：connMask + networkId
+    │   ├── Me.h          # 通物接口/通物存储单元/通物终端：connMask + networkId（内部名仍为 Me*）
     │   ├── Storage.h     # Bucket / SplitterQueue / OreDeposit(有限储量)
     │   ├── Power.h       # PowerGeneratorNode / PowerCapacitor / PowerConsumer / PowerPole
     │   ├── Turret.h      # 炮塔：射程伤害射速/弹药/电力/炮管朝向
@@ -225,8 +278,14 @@ build\factory-td.exe --selftest-save
 - 8 种矿石独立矿点随机散布全图（种子42，避开路径、互不重叠）；**有限储量**每点 1000，采尽矿点消失。
 - **采矿场 1/2/3 级**（BuildingType Miner/MinerL2/MinerL3）：Chebyshev 范围内（5×5/9×9/13×13）采集**所有类型**矿石，每秒 4/16/256 个（`m.acc += rate*dt`，按矿点储量递减）。
 - **虚空采矿场**（MinerVoid）：无矿点，8 矿石轮转产出共 4096/秒。
-- 采矿机**不再要求脚下有矿点**（预览已删该检查）；测试期免供电（MINER_FREE_POWER=true）；右键旋转输出面。
-- ⚠ 虚空采矿场 4096/s 会远超管道/机器吞吐——设计上应接储物桶直连或 ME 网络，否则背压停摆（用户已知，属设计）。
+- 采矿机**不再要求脚下有矿点**（预览已删该检查）；测试期免供电（MINER_FREE_POWER=true）。
+- **右键采矿机 = 打开设置面板**（v1.3.3，`GameUI::drawMinerPanel`），面板内含：**模式切换 / 矿种筛选（8 种）/ 旋转输出面 / 关闭**。**两种采集模式（v1.3.3）**：
+  - **原有模式**（`fixedOre=false`，默认）：半径内所有矿点**等概率随机**取一个——与旧版行为逐字一致。
+  - **固定矿点模式**（`fixedOre=true`）：`MinerSystem::setFixedMode` → `bindAndSnap()` **吸附到矿点旁**（8 邻格、优先正邻、就近，靠 `Game::moveBuilding`），只采 `oreFilter` 那一个矿点；采尽/矿点消失由 `MinerSystem::boundDeposit()` 回退到范围内最近的同矿种矿点。
+  - **产量规则两种模式完全相同**（同一个 `m.rate`，`while (acc>=1)` 每轮 1 个）——改逻辑时不要动这条。
+  - `MinerSystem::rotateOutputFace()` 旋转时**同步 `b.dir` 与 `FaceConfig`**（旧版只转面不改 dir → 箭头与实际输出错位）。
+- ⚠ 虚空采矿场 4096/s 会远超管道/机器吞吐——设计上应接储物桶直连或 通物网络，否则背压停摆（用户已知，属设计）。
+- ⚠ 固定矿点模式的**吸附会真实移动建筑**（换矿种/换模式时位置可能变化）——这是需求要求的行为（"固定矿点模式要定义采矿场的生成位置"），不是 bug。
 
 ### 5.3 冶炼/合金/组装（add.txt ⑥⑨⑩）
 - **数据驱动配方表**（GameConfig.h 中 `std::vector<Recipe>`，全部可由 config.json 覆盖/增删）：
@@ -281,10 +340,17 @@ build\factory-td.exe --selftest-save
 - 暗色工业风全 UI（GameUI.cpp 顶部 UI_* 常量统一配色）；地形程序化（草地草斑/路径碎石车辙，覆盖 PNG）。
 - **小地图**（左下 160px，Xaero 式：地形/矿点/建筑/敌人+视野框，0.3s 节流重建到 RenderTexture）；**世界地图**（M 键全屏，1格=1像素最近邻放大）。
 - 中文字体打包 `assets/fonts/simsun.ttc`，加载顺序：打包字体→系统字体。
-- **游戏内说明书 / 新手引导**（v1.3.0，`GameUI::drawHelp`）：H / F1 或左上角「帮助」按钮打开；6 个标签页——新手引导（7 步上手）/ 操作按键 / 建筑一览 / 生产与物流 / 电力系统 / 常见问题，文案集中在 `GameUI.cpp` 末尾匿名 namespace 的 `buildHelpPage()`，建筑说明在 `buildingHelp()`（按 `BuildingType` switch，新增建筑时记得补）。滚轮滚动用 `helpScroll_`（绘制时按内容高度钳制上限）；与商店/工作台/世界地图互斥；`Game` 构造末尾 `if (!hasSave()) ui->openHelp(0)` 实现新开局自动弹出。
+- **游戏内说明书**（v1.3.0，`GameUI::drawHelp`）：H / F1 或左上角「帮助」按钮打开；6 个标签页——新手引导（7 步上手）/ 操作按键 / 建筑一览 / 生产与物流 / 电力系统 / 常见问题，文案集中在 `GameUI.cpp` 末尾匿名 namespace 的 `buildHelpPage()`，建筑说明在 `buildingHelp()`（按 `BuildingType` switch，新增建筑时记得补）。滚轮滚动用 `helpScroll_`（绘制时按内容高度钳制上限）；与商店/工作台/世界地图互斥。
+  ⚠ **v1.3.3 变更**：`Game` 构造末尾的 `if (!hasSave()) ui->openHelp(0)`（新开局自动弹出）**已删除**，`autoOpenHelp` 设置也随之删除；系统性教学改由**「新手教程」独立模式**承担（见 §5.11）。
+- **新手教程 / 叙事播报**（v1.3.3）：
+  - `systems/TutorialSystem.*`：章节/步骤/任务/进度，进度存 `saves/tutorial.json`；顶部引导横幅 + 跳过按钮，`F2` 跳过/重开；教程模式不出自动波次，敌人由教学步骤手动召唤。
+  - `systems/Narrative.*`：事件播报 + 右下角通讯条 `GameUI::showComms`（头像/说话人/台词，独立通道，不被 Toast 挤掉）；教程模式下不叠加。
+  - 入口：`Game::gameMode`（`Normal` / `Tutorial`），由 `ui/EntrySystem` 主菜单选择（`T` 教程 / `N` 普通关卡）。
 
 ### 5.10 快捷键总表
-WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉7组装机8发电机9电线杆0燃煤发电机 -电容 =电线 \分流器 / TAB循环 / 左键放置（带方向弹窗） / 右键：矿机转面、组装机配方、ME设备→终端面板、电线机器桶发电机→面编辑器 / DEL拆除返还 / Z X C U 刷怪 / B 商店 / V 工作台 / M 世界地图 / H F1 说明书 / F5存 F9读 / ESC：有面板先关面板，否则打开暂停面板（继续游戏/保存存档/设置/返回主界面）
+WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉7组装机8发电机9电线杆0燃煤发电机 -电容 =电线 \分流器 / TAB循环 / 左键放置（带方向弹窗） / 右键：**矿机→采矿场设置面板（模式/矿种/旋转输出面）**、组装机配方、通物设备→终端面板、电线机器桶发电机→面编辑器 / DEL拆除返还 / Z X C U 刷怪 / B 商店 / V 工作台 / M 世界地图 / H F1 说明书 / **F2 教程跳过·重开** / F5存 F9读（教程模式不保存/不读取） / ESC：有面板先关面板，否则打开暂停面板（继续游戏/保存存档/设置/返回主界面）
+
+> 主菜单快捷键：`T` 新手教程 / `N` 普通关卡 / `C` 继续游戏。
 
 ---
 
@@ -327,11 +393,13 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 ## 9. 存档（SaveSystem.cpp，JSON：build/saves/factory_td.json）
 
+- 另有**独立**的教程进度存档 `saves/tutorial.json`（v1.3.3，`systems/TutorialSystem.*`），与主存档**互不影响**。
 - **保存顺序**：v/gold/lives/wave状态/cam_x,cam_y/inv → ores(含amount) → buildings → pipes(缓冲) → me_networks → enemies。
 - **加载顺序**：解析JSON(失败直接返回，不清世界) → 清空reg+网格 → 矿点 → 建筑(placeBuilding+恢复各类型状态+统一恢复faces) → 管道缓冲(按坐标直接回填，不再重复place) → ME网络(rebuildNetworks后按编号回填) → 敌人 → 全局状态 → 无限资源补全 → power.dirty。
-- **每类建筑保存/恢复的内容**：塔(ammo/barrel/power)、矿机(level/void/acc/**库存items**)、熔炉合金组装机(has_job/job_input/job_time/job_total/recipe/items)、发电机(coal/fuel_time/burn)、桶(items/output_timer)、电容(energy)、分流器(queue/output_index)、**所有 FaceConfig 统一保存 faces**、摄像机。
+- **每类建筑保存/恢复的内容**：塔(ammo/barrel/power)、矿机(level/void/acc/**库存items** + v1.3.3 新增 **fixed_ore/ore_filter/has_bound/bound_x/bound_y**)、熔炉合金组装机(has_job/job_input/job_time/job_total/recipe/items)、发电机(coal/fuel_time/burn)、桶(items/output_timer)、电容(energy)、分流器(queue/output_index)、**所有 FaceConfig 统一保存 faces**、摄像机。
 - 未保存（有意/可接受）：子弹、塔冷却、UI瞬态、管道计时器。
 - ME 网络编号确定性：布局相同→行主序BFS编号相同→按数组下标回填。
+- ⚠ **读档不做"自动吸附/重排"**：v1.3.3 采矿场的固定矿点模式在**读档时只回填缓存字段、绝不调用 `snapBeside`**（否则旧存档的建筑会在读档瞬间被挪位置）。`bound_x/bound_y` 与矿点 `GridPos` 对不上时，由 `MinerSystem::boundDeposit()` 在运行时回退重新绑定。
 
 ### 9.1 ⚠ 存档史上最严重 bug（已修，勿重犯）
 读档代码曾写 `bj.value("items", json::object()).begin()/end()`——两次 `value()` 产生**两个临时对象**，迭代器悬空 → 只要库存非空读档就崩，方块物品全丢。**规则：`value()` 结果必须先绑定 `const json&` 再取 begin/end**（全项目已清理4处，新代码同样遵守）。
@@ -341,7 +409,8 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 ## 10. 渲染与贴图
 
 - RenderSystem 分 13 层顶点数组批量渲染+视野剔除；贴图分辨率无关（drawGridSprite 归一化到 TILE_SIZE）。
-- 程序化生成（AssetManager::generateStaticTextures）：地形(覆盖PNG)、熔炉/合金炉4方向、电容、发电机、矿机L2/L3/虚空4方向（machineKey(rotated=true) 映射 (d+3)%4）、5种新矿石（PNG缺失时兜底）。
+- 程序化生成（AssetManager::generateStaticTextures）：地形(覆盖PNG)、熔炉/合金炉4方向、电容、发电机、矿机L2/L3/虚空4方向、5种新矿石（PNG缺失时兜底）。
+- ⚠ **贴图朝向约定（v1.3.3 修正，勿再改回）**：`machine_miner/generator/assembler_<dir>.png` 的**后缀 == 视觉朝向**（PNG 由 `organize_sprites.py` 顺时针 `rotate(-dir*90)` 生成）；`AssetManager::machineKey(name, dir)` 直接用 `DIR_NAMES_4[dir]`（`rotated` 参数保留但**不再参与映射**），程序化箭头绘制的 `texDir` 也必须等于 `dir`。**三处必须同改。**（旧版沿用 Python 的 `(d+3)%4` 逆时针映射，导致全部机器贴图偏左 90°。）塔的 8 方向 `towerKey` + RenderSystem `setRotation` 是另一套，未受影响。
 - 管道/分流器/ME设备在 RenderSystem 第4层程序化绘制（外壳+connMask连接条+端点暗色端口；ME青色）；ME接口菱形/存储容量条/终端屏幕。
 - **纯紫块=PNG缺失回退**：`loadTexture` 失败插紫红；`tryLoadTexture` 失败不插（给程序化兜底让路）——新加"PNG可有可无+程序化兜底"的贴图用后者。
 
@@ -369,6 +438,11 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 18. **菜单类界面的鼠标悬停不要每帧夺焦**（本轮踩过、已修，见 §0.3）：写 `if (r.contains(mp)) settingRow = i;` 会导致鼠标停住时键盘焦点被每帧弹回该行，↑↓/←→ 形同失效。**鼠标悬停只该改"高亮"，只有在鼠标真正移动时才允许它接管键盘焦点**（记住上一帧鼠标位置做比较）。
 19. **不能在 `pollEvent` 事件循环内重建 SFML 窗口**：切换显示模式（全屏/分辨率）需重建窗口，必须延后到事件循环之外执行，否则崩溃/事件丢失。EntrySystem 用 `pendingDisplayApply` 标志在 `render()` 开头统一处理。
 20. **exe 必须在 `build/` 下运行**：所有路径（assets / saves）都相对 cwd。在 `factory-td/` 下跑会写出杂散文件 `factory-td/saves/settings.json`（已实际发生）。
+21. **贴图朝向映射不能"照抄 Python"**（v1.3.3 踩过、已修，见 §0.3-4）：C++ 版 PNG 是"顺时针生成、文件名即朝向"，却沿用了 Python 的逆时针键表 → 全部机器贴图偏左 90°。**改朝向映射前先看 `assets/sprites/machines/` 的文件名与箭头方向。** 相关三处（`machineKey` / PNG 路径 / 程序化 `texDir`）必须一起改。
+22. **SFML `setVerticalSyncEnabled` 与 `setFramerateLimit` 互相拆台**（v1.3.3 踩过）：必须走 `gset::applyFrameMode()` 唯一入口，按固定顺序"二选一"；别在别处再直接调这两个 setter。
+23. **一切"速度"乘 `dt`、"平滑"用帧率无关形式**（v1.3.3 踩过）：`Camera` 原先每帧固定步长，144Hz 屏上比 60Hz 快 2.4 倍。新增移动/动画/计时同理。
+24. **新增存档字段必须"可缺省"**（v1.3.3 采矿场模式字段的示范）：读取一律 `bj.value("key", 默认值)`，旧存档缺键时回落到旧行为（`fixed_ore` 缺省 = false = 原有模式），且**读档不做任何"自动重排/吸附"**，避免旧存档被悄悄改动。**存档格式只增不改不删**（`type` 字段值尤其不能改）。
+25. **教程进度的落盘必须与主存档隔离**（v1.3.3）：`saves/tutorial.json` 独立文件；教程模式内 `F5`/`F9` 明确提示"不保存/不读取"，**绝不能共用 `saves/factory_td.json`**，否则教学中的临时建造会污染玩家正式存档。
 
 ---
 
@@ -376,16 +450,21 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 | 事项 | 状态（用户原话） |
 |---|---|
+| 新手教程模式 + 叙事播报（v1.3.3，已发布） | **代码完成、编译/自检/冒烟通过、文档已同步**；遗留 = 人工实机走查（教程全流程 / 通讯条观感，见 §0） |
+| 采矿场双模式（v1.3.3，已发布） | 代码完成；遗留 = 实机确认"吸附位置 + 两模式产率一致 + 读档恢复"（见 §0） |
+| 贴图朝向 / 高刷速度 / 高DPI 修复（v1.3.3，已发布） | 代码完成；遗留 = 实机目视确认（这三项**必须人眼验证**，见 §0.3） |
 | 游戏内暂停面板（v1.3.2，已发布） | **代码完成、编译/自检/冒烟通过、文档已同步**；唯一遗留 = 人工实机视觉走查（见 §0） |
 | 启动入口系统（v1.3.1，已发布） | 代码完成、编译/自检/冒烟通过、文档已同步；人工视觉走查见 §0 |
-| 游戏内"设置"入口 | 未做（当前设置只在启动菜单改）；做之前先问用户 |
+| 游戏内"设置"入口 | 未做（当前设置只在启动菜单/暂停面板改）；做之前先问用户 |
 | 商店正式配方表 | **以后再写**；当前 shop_offers 是占位（示例"200币+10电路板=1组装机"禁止加入） |
 | 音效 | 以后再加 |
 | 粒子特效 | 性能问题暂时不加 |
 | 自动化测试入库 | 暂时不用（但已有 --selftest-save 可用） |
 | 波次"显示刷怪"UI | 目前不打开（wave_auto_spawn=false；分键召唤已做） |
 | 矿机合成表 | 待定（逻辑已写好，造价是占位） |
-| 新手引导 / 游戏内说明书 | **已完成**（v1.3.0：H / F1 + 左上角帮助按钮 + 新开局自动弹出，6 标签页） |
+| 游戏内说明书 | **已完成**（v1.3.0：H / F1 + 左上角帮助按钮，6 标签页；v1.3.3 起**不再新开局自动弹出**） |
+| 新手教程模式 | **已完成**（v1.3.3：主菜单独立入口 `T`，`systems/TutorialSystem.*`，`F2` 跳过/重开，进度存 `saves/tutorial.json`） |
+| 叙事 / 织女星通讯 | **已完成**（v1.3.3：`systems/Narrative.*` + `GameUI::showComms`） |
 | 性能基准 | 用户说不需要 |
 | 电网损耗/过载 | 设计如此，不改 |
 | 击杀掉落 | 只加金币，不产生掉落（按需求） |
@@ -407,6 +486,6 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 ## 14. 版本与文档
 
-- 代码版本进度见 `update.md`：**Alpha v1.3.2 为当前版本**（游戏内暂停面板 + 设置项共用化）；v1.3.1 启动入口系统 + 跨场景用户设置；v1.3.0 游戏内说明书 / 新手引导；v1.2.4 商店与背包重构 + 合金炉改为选定配方且无需电力；v1.2.3 ME 接口输出过滤 + GUI/贴图重设计；v1.2.1 ME 网络 + 存档修复；v1.2.0 为 add.txt 主体功能（含管道设计解析）；v1.1.0 为早期重构。
+- 代码版本进度见 `update.md`：**Alpha v1.3.3 为当前版本**（品牌重塑《织星计划》+ 新手教程模式 + 叙事播报 + 采矿场双模式 + 贴图/高刷/高DPI 修复 + ME→通物）；v1.3.2 游戏内暂停面板 + 设置项共用化；v1.3.1 启动入口系统 + 跨场景用户设置；v1.3.0 游戏内说明书 / 新手引导；v1.2.4 商店与背包重构 + 合金炉改为选定配方且无需电力；v1.2.3 ME 接口输出过滤 + GUI/贴图重设计；v1.2.1 ME 网络 + 存档修复；v1.2.0 为 add.txt 主体功能（含管道设计解析）；v1.1.0 为早期重构。
 - 注意 update.md 里的日期（08-15~17）比实际开发日（08-25）滞后一周左右，继续写时用真实日期即可。
 - Python 老版在 `python版（老版）/`，PORTING.md 有逐文件对照，不再维护。

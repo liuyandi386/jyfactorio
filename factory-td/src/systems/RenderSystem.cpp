@@ -290,7 +290,7 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
         }
     }
 
-    // ================= 4. 物品管道 + 分流器（AE2式，无动画） =================
+    // ================= 4. 物品管道 + 分流器（即时路由，无动画） =================
     {
         auto appendQuad = [](sf::VertexArray& va, sf::Vector2f p, sf::Vector2f s,
                              sf::Color c) {
@@ -303,7 +303,7 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
         sf::VertexArray casingInner(sf::Quads); // 内层盖板
         sf::VertexArray links(sf::Quads);       // 管道/端口连接
 
-        // 节点判定：管道0 / 分流器1 / ME接口2 / ME存储单元3 / ME终端4
+        // 节点判定：管道0 / 分流器1 / 通物接口2 / 通物存储单元3 / 通物终端4
         auto nodeKind = [&](entt::entity e) -> int {
             if (e == entt::null || !g.reg.valid(e)) return -1;
             if (g.reg.all_of<Pipe>(e)) return 0;
@@ -381,7 +381,7 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
                             break;
                     }
                     if (mask & (1u << d)) {
-                        // 连接到同类设备：亮色传输线（ME亮青）
+                        // 连接到同类设备：亮色传输线（通物亮青）
                         link = isMe    ? sf::Color(0, 220, 255)
                               : kind == 1 ? sf::Color(0, 200, 220)
                                           : sf::Color(150, 190, 210);
@@ -453,7 +453,7 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
             }
         }
 
-        // ---- ME设备核心图标（AE2式：接口菱形 / 存储单元容量条 / 终端屏幕） ----
+        // ---- 通物设备核心图标（接口菱形 / 存储单元容量条 / 终端屏幕） ----
         for (auto [e, b] : g.reg.view<Building>().each()) {
             const bool isMe = b.type == cfg::BuildingType::MeInterface ||
                               b.type == cfg::BuildingType::MeDrive ||

@@ -24,12 +24,13 @@
 namespace {
 
 // ---------------- 文案 ----------------
-constexpr const char* kTitleMain = "异星工厂塔防";
-constexpr const char* kTitleEn   = "F A C T O R Y   T D";
-constexpr const char* kVersion   = "v1.3.2  ALPHA BUILD";
+constexpr const char* kTitleMain = "织星计划";
+constexpr const char* kTitleEn   = "W E A V E S T A R";
+constexpr const char* kVersion   = "v1.3.3  ALPHA BUILD";
 constexpr const char* kStudio    = "JYGame 工作室";
-constexpr const char* kTagline   = "自动化流水线 · 塔防 · 无限可能";
-constexpr const char* kSavePath  = "saves/factory_td.json";
+constexpr const char* kCompany   = "织星工业";                                   // 玩家所属公司
+constexpr const char* kTagline   = "建厂 · 清障 · 交付 · 前往下一颗星球";
+constexpr const char* kSavePath  = "saves/factory_td.json";                      // 文件名保留，兼容已有存档
 
 // ---------------- 调色板（工业暗色 + 警示橙） ----------------
 const sf::Color kBgTop(9, 13, 18);
@@ -75,8 +76,11 @@ EntrySystem::EntrySystem() {
         saveSummary = ec ? std::string("已找到存档")
                          : (std::to_string(static_cast<double>(bytes) / 1024.0).substr(0, 4) + " KB");
     }
+    // 主菜单：新手教程与普通关卡是两个完全独立的模式入口，平级并列、互不嵌套
     menu = {
-        {"开始新游戏", "从零开始建造属于你的自动化产线", true},
+        {"新手教程", "独立的引导关卡 · 织女星带你分步上手（不影响存档）", true},
+        {"普通关卡", hasSaveFile ? "新开一局 · 不影响已有存档"
+                                 : "从零开始建造属于你的自动化产线", true},
         {"继续游戏", hasSaveFile ? ("读取上次存档 · " + saveSummary) : "尚未发现存档", hasSaveFile},
         {"设置", "调整显示模式与交互选项", true},
         {"关于本作", "版本 / 技术栈 / 制作信息", true},
@@ -93,8 +97,8 @@ EntrySystem::EntrySystem() {
 // =====================================================================
 void EntrySystem::createWindow() {
     // 显示模式策略统一在 Settings 层（全屏=无边框窗口，不用独占全屏，避免闪屏黑屏/鼠标漂移）
-    gset::applyToWindow(window, "异星工厂塔防 · 启动");
-    window.setFramerateLimit(60);
+    gset::applyToWindow(window, "织星计划 · Project Weavestar");
+    gset::applyFrameMode(window);   // 帧率/垂直同步统一策略（不再硬编码 60 帧）
     window.setKeyRepeatEnabled(false);
     window.setMouseCursorVisible(true);
     window.setView(sf::View(sf::FloatRect(0.f, 0.f,
@@ -426,8 +430,9 @@ void EntrySystem::onKeyPressed(const sf::Event::KeyEvent& key) {
                     menuFocus = (menuFocus + 1) % static_cast<int>(menu.size());
                     break;
                 case K::Enter: case K::Space: activateMenu(menuFocus); break;
-                case K::N: activateMenu(0); break;   // 快捷键
-                case K::C: activateMenu(1); break;
+                case K::T: activateMenu(0); break;   // 新手教程
+                case K::N: activateMenu(1); break;   // 普通关卡
+                case K::C: activateMenu(2); break;   // 继续游戏
                 case K::Escape: dialog = Dialog::ConfirmQuit; break;
                 default: break;
             }
@@ -534,7 +539,7 @@ void EntrySystem::update(float dt) {
             loadReadyTimer += dt;
             if (loadReadyTimer > 1.4f) fadeOut = std::min(1.f, fadeOut + dt * 2.2f);
             if (fadeOut >= 1.f) {
-                result = startNewGame ? EntryAction::NewGame : EntryAction::Continue;
+                result = pendingAction;
                 state = State::Finished;
             }
         }
@@ -666,7 +671,8 @@ void EntrySystem::drawTitle() {
     drawText(std::string(kVersion) + "   |   " +
                  (hasSaveFile ? ("存档 " + saveSummary) : "未发现存档"),
              16.f, h - 17.f, 13, kTextDim, 0);
-    drawText("↑↓ 选择    Enter 确认    Esc 退出", w - 16.f, h - 17.f, 13, kTextDim, 2);
+    drawText("↑↓ 选择    Enter 确认    T 教程    N 普通关卡    Esc 退出",
+             w - 16.f, h - 17.f, 13, kTextDim, 2);
 }
 
 // ---------------------------------------------------------------------
@@ -724,8 +730,8 @@ void EntrySystem::drawLoading() {
     const float leftW = contentW * 0.58f;
 
     // ---- 标题 ----
-    drawText("正在生成异星世界", w / 2.f, h * 0.17f, 36, kText, 1, true);
-    drawText("GENERATING WORLD  ·  " + std::string(kVersion), w / 2.f, h * 0.17f + 32.f, 14,
+    drawText("正在生成星球地表", w / 2.f, h * 0.17f, 36, kText, 1, true);
+    drawText("PREPARING PLANET  ·  " + std::string(kVersion), w / 2.f, h * 0.17f + 32.f, 14,
              kAccentSoft, 1);
 
     // ---- 进度条 ----
@@ -863,7 +869,7 @@ int EntrySystem::dialogOptionCount() const {
 std::string EntrySystem::dialogOptionLabel(int i) const {
     switch (dialog) {
         case Dialog::About:          return "关闭";
-        case Dialog::ConfirmNewGame: return i == 0 ? "开始新游戏" : "返回";
+        case Dialog::ConfirmNewGame: return i == 0 ? "开始普通关卡" : "返回";
         case Dialog::ConfirmQuit:    return i == 0 ? "退出游戏" : "取消";
         default:                     return "";
     }
@@ -915,19 +921,20 @@ void EntrySystem::drawDialog() {
     std::string title;
     std::vector<std::string> lines;
     if (dialog == Dialog::ConfirmNewGame) {
-        title = "开始新游戏";
+        title = "开始普通关卡";
         lines = {"检测到已有存档文件。",
-                 "新游戏将从零开始，旧存档在按 F5 保存前不会被覆盖。",
-                 "确定要开始新游戏吗？"};
+                 "普通关卡将从零开始，旧存档在按 F5 保存前不会被覆盖。",
+                 "确定要开始普通关卡吗？"};
     } else if (dialog == Dialog::ConfirmQuit) {
         title = "退出游戏";
-        lines = {"确定要退出《异星工厂塔防》吗？", "游戏内随时可按 F5 保存进度。"};
+        lines = {"确定要退出《织星计划》吗？", "游戏内随时可按 F5 保存进度。"};
     } else {
         title = "关于本作";
-        lines = {"异星工厂塔防  ·  " + std::string(kVersion),
+        lines = {"织星计划  ·  " + std::string(kVersion),
+                 std::string("身份: ") + kCompany + "外派工程师    随船 AI: 织女星",
+                 "玩法: 建厂 → 清障 → 交付指标 → 前往下一颗星球",
                  "技术栈: C++20 / SFML 2.6 / EnTT (ECS 架构)",
-                 "玩法: 采集 → 冶炼 → 组装 → 物流 → 电网 → 塔防",
-                 "存档: saves/factory_td.json      设置: saves/settings.json",
+                 "存档: saves/        设置: saves/settings.json",
                  "制作: " + std::string(kStudio)};
     }
 
@@ -965,11 +972,12 @@ void EntrySystem::activateMenu(int index) {
     if (index < 0 || index >= static_cast<int>(menu.size())) return;
     if (!menu[index].enabled) return;
     switch (index) {
-        case 0: requestStart(EntryAction::NewGame); break;
-        case 1: requestStart(EntryAction::Continue); break;
-        case 2: openSettings(); break;
-        case 3: dialog = Dialog::About; break;
-        case 4: dialog = Dialog::ConfirmQuit; break;
+        case 0: requestStart(EntryAction::Tutorial); break;   // 新手教程（独立模式）
+        case 1: requestStart(EntryAction::NewGame); break;    // 普通关卡（独立模式）
+        case 2: requestStart(EntryAction::Continue); break;
+        case 3: openSettings(); break;
+        case 4: dialog = Dialog::About; break;
+        case 5: dialog = Dialog::ConfirmQuit; break;
         default: break;
     }
 }
@@ -992,13 +1000,20 @@ void EntrySystem::closeSettings() {
 
 void EntrySystem::cycleSettingRow(int row, int dir) {
     // 取值切换逻辑在 gset 里（与游戏内暂停面板共用同一份，保证行为一致）
-    if (gset::cycleSettingRow(row, dir))
+    if (gset::cycleSettingRow(row, dir)) {
         pendingDisplayApply = true;   // 显示模式变化：事件循环结束后再重建窗口
+        return;
+    }
+    // 帧率/垂直同步不需要重建窗口，就地套用（否则要等下次重建窗口才生效）
+    if (row == gset::SETTING_ROW_FRAME_MODE) gset::applyFrameMode(window);
 }
 
 void EntrySystem::activateSettingRow(int row) {
     switch (gset::activateSettingRow(row)) {
         case gset::SettingActivate::DisplayChanged: pendingDisplayApply = true; break;
+        case gset::SettingActivate::Changed:
+            if (row == gset::SETTING_ROW_FRAME_MODE) gset::applyFrameMode(window);
+            break;
         case gset::SettingActivate::Back:           closeSettings(); break;
         default:                                    break;
     }
@@ -1010,7 +1025,12 @@ void EntrySystem::requestStart(EntryAction action) {
         beginLoading(action);
         return;
     }
-    // 新游戏：已有存档时先确认（避免玩家误以为进度丢失）
+    // 新手教程是完全独立的模式：直接进入，不校验、不触碰主存档
+    if (action == EntryAction::Tutorial) {
+        beginLoading(action);
+        return;
+    }
+    // 普通关卡 · 新游戏：已有存档时先确认（避免玩家误以为进度丢失）
     if (hasSaveFile) {
         dialog = Dialog::ConfirmNewGame;
         return;
@@ -1019,7 +1039,7 @@ void EntrySystem::requestStart(EntryAction action) {
 }
 
 void EntrySystem::beginLoading(EntryAction action) {
-    startNewGame = (action == EntryAction::NewGame);
+    pendingAction = action;
     loadSteps = {
         "读取引擎配置 assets/config.json",
         "校验本地存档数据",

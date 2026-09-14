@@ -2,17 +2,22 @@
 // main.cpp —— 程序入口
 //
 // 创建游戏主控并进入主循环（对应 Python main.py 的 main()）。
-// 帧率由 sf::Clock 计算dt + setFramerateLimit(60) 双重稳定。
+// 帧时间由 sf::Clock 计算 dt 驱动（与帧率无关）；
+// 帧率/垂直同步策略统一在 gset::applyFrameMode（见 Settings.h），
+// 默认垂直同步 → 跟随显示器刷新率（144Hz 屏即 144 帧）。
 //
-// 附加：`factory-td.exe --selftest-save` 运行存档往返自检
-// （保存→清空→读档→逐项核对，自动备份/恢复玩家存档），
-// 退出码 0=全部通过，1=存在失败项。
+// 附加命令行参数：
+//   --selftest-save  运行存档往返自检（保存→清空→读档→逐项核对，
+//                    自动备份/恢复玩家存档），退出码 0=全部通过，1=存在失败项
+//   --safe-mode      黑屏应急启动：强制 1280×720 窗口化 + 垂直同步
+//                    （不写回 saves/settings.json，下次正常启动仍用原设置）
 //
-// 启动顺序：读取用户设置 → 入口系统（启动动画/标题菜单/设置/加载）
+// 启动顺序：开启高 DPI 感知 → 读取用户设置 → 入口系统（启动动画/标题菜单/设置/加载）
 // → 按入口选择创建 Game（新游戏 or 读档继续）→ 游戏主循环。
 // 游戏内暂停面板选「返回主界面」时回到入口系统（循环重进，见下）。
 // =====================================================================
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -26,7 +31,46 @@
 #include "systems/MeSystem.h"
 #include "components/Me.h"
 
+#ifdef _WIN32
+// 放在 SFML 头之后包含，避免 windows.h 的宏污染 SFML（与 Settings.cpp 一致）
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace {
+
+// ---------------------------------------------------------------------
+// 高 DPI 感知（必须在创建任何窗口之前调用）
+// ---------------------------------------------------------------------
+// 不做这一步时进程是"DPI 不感知"的：在 125%/150% 缩放的桌面上（2K/4K 高刷屏很常见）
+// 系统会把桌面虚拟化成更小的逻辑尺寸，sf::VideoMode::getDesktopMode() 拿到的尺寸
+// 与实际屏幕不一致 —— 无边框全屏窗口于是只占画面一角/露出桌面，
+// 部分显卡驱动下还会因为后台缓冲尺寸与窗口客户区不匹配而整屏黑掉。
+//
+// 用 GetProcAddress 动态取地址，避免依赖新版本 Windows SDK 的符号：
+//   -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2（Win10 1703+）
+//   退化路径 SetProcessDPIAware（Vista+）也聊胜于无。
+void enableHighDpiAwareness() {
+#ifdef _WIN32
+    const HMODULE user32 = ::LoadLibraryW(L"user32.dll");
+    if (!user32) return;
+    using SetCtxFn   = BOOL(WINAPI*)(void*);
+    using SetAwareFn = BOOL(WINAPI*)(void);
+    if (auto setCtx = reinterpret_cast<SetCtxFn>(
+            ::GetProcAddress(user32, "SetProcessDpiAwarenessContext"))) {
+        if (setCtx(reinterpret_cast<void*>(static_cast<std::intptr_t>(-4)))) return;
+    }
+    if (auto setAware = reinterpret_cast<SetAwareFn>(
+            ::GetProcAddress(user32, "SetProcessDPIAware")))
+        setAware();
+#endif
+}
+
 
 struct Check {
     bool ok = false;
@@ -117,9 +161,9 @@ int runSelftestSave() {
     // 发电机
     game.reg.get<Inventory>(gen).add(cfg::ItemType::Coal, 9);
     game.reg.get<PowerGeneratorNode>(gen).fuelTime = 1.5f;
-    // ME网络
+    // 通物网络
     MeSystem::rebuildNetworks(game);
-    check("ME网络已重建", !MeSystem::networks().empty());
+    check("通物网络已重建", !MeSystem::networks().empty());
     if (!MeSystem::networks().empty()) {
         MeSystem::addItem(MeSystem::networksMutable().front(), cfg::ItemType::IronIngot, 10);
         MeSystem::addItem(MeSystem::networksMutable().front(), cfg::ItemType::CopperIngot, 6);
@@ -200,7 +244,7 @@ int runSelftestSave() {
         game.reg.get<Inventory>(g2).count(cfg::ItemType::Coal) == 9 &&
         std::abs(game.reg.get<PowerGeneratorNode>(g2).fuelTime - 1.5f) < 0.001f);
 
-    check("ME网络物品(铁锭10+铜锭6)", !MeSystem::networks().empty() &&
+    check("通物网络物品(铁锭10+铜锭6)", !MeSystem::networks().empty() &&
         MeSystem::countItem(MeSystem::networks().front(), cfg::ItemType::IronIngot) == 10 &&
         MeSystem::countItem(MeSystem::networks().front(), cfg::ItemType::CopperIngot) == 6);
 
@@ -234,12 +278,24 @@ int runSelftestSave() {
 } // namespace
 
 int main(int argc, char** argv) {
+    // ⚠ 必须在创建任何窗口之前：开启高 DPI 感知（高刷屏常配 125%/150% 缩放）
+    enableHighDpiAwareness();
+
     // 最先读取用户设置：入口系统与游戏窗口都据此决定显示模式
     // 首次运行（或配置文件损坏）时写入一份默认设置，方便玩家直接编辑
     if (!gset::load("saves/settings.json")) gset::save("saves/settings.json");
 
-    if (argc > 1 && std::string(argv[1]) == "--selftest-save")
-        return runSelftestSave();
+    // 黑屏应急：强制窗口化 + 垂直同步，绕开"无边框全屏 + 置顶窗口"这条路径。
+    // 刻意不 save()：只在本次运行生效，玩家的 saves/settings.json 保持原样。
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--safe-mode" || a == "--windowed") {
+            gset::get().displayMode = gset::DisplayMode::Window1280x720;
+            gset::get().frameMode   = gset::FrameMode::Vsync;
+        } else if (a == "--selftest-save") {
+            return runSelftestSave();
+        }
+    }
 
     // ---- 游戏入口：启动动画 → 标题/主菜单 → 设置 → 加载 → 游戏 ----
     // 循环：游戏内暂停面板选「返回主界面」后重新进入入口系统（等价于回到上一级菜单）
@@ -252,8 +308,11 @@ int main(int argc, char** argv) {
         if (action == EntryAction::Quit) return 0;
 
         {
-            Game game;                      // 初始化窗口/资源/地形/矿点
-            if (action == EntryAction::Continue) game.loadGame();   // 继续上次存档
+            // 两种模式完全独立、互不嵌套：由主菜单各自的入口按钮决定走哪条流程
+            const GameMode mode = (action == EntryAction::Tutorial) ? GameMode::Tutorial
+                                                                    : GameMode::Normal;
+            Game game(mode);                // 初始化窗口/资源/地形/矿点
+            if (action == EntryAction::Continue) game.loadGame();   // 普通关卡 · 读取上次存档
             game.run();                     // 游戏主循环
             if (!game.returnToMenu) return 0;   // 关窗 = 正常退出
         }

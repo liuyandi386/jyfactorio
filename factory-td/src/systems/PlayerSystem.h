@@ -19,8 +19,8 @@ public:
     /// 处理世界交互事件（UI未消费时调用）
     static void handleEvent(Game& g, const sf::Event& e);
 
-    /// 每帧更新摄像机（WASD）
-    static void updateCamera(Game& g);
+    /// 每帧更新摄像机（WASD）；dt = 帧耗时(秒)，保证高刷新率下速度一致
+    static void updateCamera(Game& g, float dt);
 
     /// 每帧更新放置预览数据
     static void updatePreview(Game& g);

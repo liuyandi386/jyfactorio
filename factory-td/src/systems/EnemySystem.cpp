@@ -7,6 +7,7 @@
 #include <cmath>
 #include <vector>
 #include "Game.h"
+#include "systems/Narrative.h"
 #include "utils/Profiler.h"
 
 // ---------------------------------------------------------------------
@@ -28,6 +29,9 @@ void EnemySystem::spawnEnemy(Game& g, cfg::EnemyType type) {
     en.pathIndex = 1;                          // Python: 初始目标为第2个路径点
     en.target = g.enemyWaypoints[1];
     en.reachedEnd = false;
+
+    // 叙事层：首次遇敌（教程模式的敌人生成由旁白负责，不叠加）
+    if (!g.isTutorial()) narrative::announceOnce(g, narrative::Event::FirstCombat);
 }
 
 // ---------------------------------------------------------------------
@@ -69,6 +73,9 @@ void EnemySystem::update(Game& g, float dt) {
         g.reg.destroy(e);
         if (g.lives <= 0) g.gameOver = true;   // 基地血量归零 → 游戏结束
     }
+    // 叙事层：防护告急（真正被突破过、且余量见底时提醒一次）
+    if (!arrived.empty() && !g.isTutorial() && g.lives <= 3)
+        narrative::announceOnce(g, narrative::Event::LowLives);
 }
 
 // ---------------------------------------------------------------------
@@ -85,6 +92,10 @@ void EnemySystem::processKills(Game& g) {
         g.gold += en.reward;                   // 金币奖励（可兑换材料的货币）
         g.reg.destroy(e);
     }
+    // 新手引导：击杀事件（"首次击杀"步骤判定）
+    if (!dead.empty()) tutorial::onEnemyKilled(g, static_cast<int>(dead.size()));
+    // 叙事层：首次击杀
+    if (!dead.empty() && !g.isTutorial()) narrative::announceOnce(g, narrative::Event::FirstKill);
 }
 
 // ---------------------------------------------------------------------
@@ -118,6 +129,9 @@ void EnemySystem::updateWaves(Game& g, float dt) {
                 // 波内敌人清空 → 进入波间等待
                 g.waveState = WaveState::WaveEnd;
                 g.waveTimer = cfg::WAVE_INTERVAL;
+                // 叙事层：波次之间的开发日志（简短进度报告；每 3 波换成织女星短评）
+                narrative::waveLog(g, std::max(1, g.currentWave),
+                                   g.enemiesPerWave, g.lives);
             }
             break;
 

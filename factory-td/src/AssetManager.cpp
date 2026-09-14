@@ -179,7 +179,12 @@ std::string AssetManager::towerKey(cfg::TurretType t, int dir8) {
 }
 
 std::string AssetManager::machineKey(const char* name, int dir, bool rotated) {
-    const int d = rotated ? (dir + 3) % 4 : dir % 4; // Python旋转映射
+    // 贴图后缀 == 逻辑朝向：PNG 文件由 organize_sprites.py 按"顺时针 angle=dir*90°"
+    // 生成并命名为 DIR_NAMES_4[dir]，所以 machine_miner_right.png 里的箭头确实指向右。
+    // 早期沿用 Python 的 DIR_NAMES_4_ROTATED 逆时针90°映射（(dir+3)%4），
+    // 会让贴图比逻辑方向多偏 90°——这就是"机器贴图向左旋转90°"的根因。
+    (void)rotated;   // 参数保留以兼容既有调用点，不再参与映射
+    const int d = ((dir % 4) + 4) % 4;
     return std::string("machine_") + name + "_" + DIR_NAMES_4[d];
 }
 
@@ -237,15 +242,15 @@ bool AssetManager::load(const std::string& assetDir) {
                         sprites + "/towers/tower_" + towerPrefix(type) + "_" + DIR_NAMES_8[d] + ".png");
         }
 
-    // ---- 机器（4方向，Python使用逆时针90°旋转映射） ----
+    // ---- 机器（4方向，贴图后缀 == 逻辑朝向） ----
     for (int d = 0; d < 4; ++d) {
         loadTexture(machineKey("miner", d, true), sprites + "/machines/machine_miner_" +
-                       DIR_NAMES_4[(d + 3) % 4] + ".png");
+                       DIR_NAMES_4[d] + ".png");
         // 组装机复用原"弹药制造机"贴图
         loadTexture(machineKey("assembler", d, true), sprites + "/machines/machine_ammo_factory_" +
-                       DIR_NAMES_4[(d + 3) % 4] + ".png");
+                       DIR_NAMES_4[d] + ".png");
         loadTexture(machineKey("generator", d, true), sprites + "/machines/machine_generator_" +
-                       DIR_NAMES_4[(d + 3) % 4] + ".png");
+                       DIR_NAMES_4[d] + ".png");
     }
     loadTexture("machine_power_pole", sprites + "/machines/machine_power_pole.png");
 
@@ -480,7 +485,7 @@ void AssetManager::generateStaticTextures() {
     };
     for (const auto& st : styles) {
         for (int d = 0; d < 4; ++d) {
-            const int texDir = (d + 3) % 4;   // 与 machineKey(rotated=true) 的映射一致
+            const int texDir = d;   // 箭头朝向 == 逻辑方向 == 贴图键后缀
             sf::RenderTexture rt; rt.create(S, S); rt.clear(sf::Color::Transparent);
             const float cx = S / 2.0f, cy = S / 2.0f;
             // 金属外壳（倒角 + 渐变）
@@ -696,7 +701,7 @@ void AssetManager::generateStaticTextures() {
 
     // ---- 组装机（4方向：机械外壳 + 齿轮 + 指示灯，覆盖旧 PNG） ----
     for (int d = 0; d < 4; ++d) {
-        const int texDir = (d + 3) % 4;
+        const int texDir = d;   // 箭头朝向 == 逻辑方向 == 贴图键后缀
         sf::RenderTexture rt; rt.create(S, S); rt.clear(sf::Color::Transparent);
         const float cx = S / 2.0f, cy = S / 2.0f;
         drawBevelPanel(rt, 2, 2, S - 4.0f, S - 4.0f,
@@ -736,7 +741,7 @@ void AssetManager::generateStaticTextures() {
 
     // ---- 旧版发电机（2×2 大功率，4方向，覆盖旧 PNG） ----
     for (int d = 0; d < 4; ++d) {
-        const int texDir = (d + 3) % 4;
+        const int texDir = d;   // 箭头朝向 == 逻辑方向 == 贴图键后缀
         sf::RenderTexture rt; rt.create(S, S); rt.clear(sf::Color::Transparent);
         const float cx = S / 2.0f, cy = S / 2.0f;
         drawBevelPanel(rt, 2, 2, S - 4.0f, S - 4.0f,

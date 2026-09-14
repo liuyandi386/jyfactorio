@@ -56,6 +56,19 @@ entt::entity buildingAtWorld(const Game& g, sf::Vector2f world) {
 static void handleKey(Game& g, const sf::Event::KeyEvent& key) {
     using K = sf::Keyboard;
     auto select = [&](cfg::BuildingType t) { g.selectBuilding(t); };
+
+    // 新手引导层：仅教程模式接入
+    //   · F2：引导进行中=跳过，否则=重新开始
+    //   · 普通关卡是完全独立的模式，不被引导系统介入，F2 与步骤判定均不生效
+    if (g.mode == GameMode::Tutorial) {
+        if (key.code == K::F2) {
+            if (g.tutorial.active) tutorial::skip(g);
+            else tutorial::begin(g);
+            return;
+        }
+        tutorial::onKey(g, key.code);   // 其余按键交给引导做步骤判定
+    }
+
     switch (key.code) {
         case K::W: g.keys[0] = true; break;
         case K::A: g.keys[1] = true; break;
@@ -134,15 +147,15 @@ void PlayerSystem::handleEvent(Game& g, const sf::Event& e) {
 // ---------------------------------------------------------------------
 // 摄像机
 // ---------------------------------------------------------------------
-void PlayerSystem::updateCamera(Game& g) {
+void PlayerSystem::updateCamera(Game& g, float dt) {
     // Python _update_camera: WASD → move → 平滑更新
     float dx = 0.0f, dy = 0.0f;
     if (g.keys[0]) dy -= 1.0f;   // W 上
     if (g.keys[2]) dy += 1.0f;   // S 下
     if (g.keys[1]) dx -= 1.0f;   // A 左
     if (g.keys[3]) dx += 1.0f;   // D 右
-    if (dx != 0.0f || dy != 0.0f) g.camera.move(dx, dy);
-    g.camera.update();
+    if (dx != 0.0f || dy != 0.0f) g.camera.move(dx, dy, dt);
+    g.camera.update(dt);
 }
 
 // ---------------------------------------------------------------------
@@ -178,7 +191,7 @@ void PlayerSystem::handleLeftClick(Game& g, sf::Vector2f world, sf::Vector2f scr
 }
 
 // ---------------------------------------------------------------------
-// 右键：采矿机旋转输出面、面配置编辑器、组装机配方菜单
+// 右键：采矿机设置面板（采集模式/矿种/旋转输出面）、面配置编辑器、组装机配方菜单
 // （物品管道/分流器自动链接，无需右键交互）
 // ---------------------------------------------------------------------
 void PlayerSystem::handleRightClick(Game& g, sf::Vector2f world, sf::Vector2f screen) {
@@ -191,8 +204,8 @@ void PlayerSystem::handleRightClick(Game& g, sf::Vector2f world, sf::Vector2f sc
         case cfg::BuildingType::MinerL2:
         case cfg::BuildingType::MinerL3:
         case cfg::BuildingType::MinerVoid: {
-            // 采矿机旋转输出面（Python rotate_direction）
-            g.reg.get<FaceConfig>(e).rotate();
+            // 采矿机：打开设置面板（切换采集模式 / 选择矿种 / 旋转输出面）
+            g.ui->showMinerPanel(e);
             break;
         }
         case cfg::BuildingType::Assembler:
@@ -202,13 +215,13 @@ void PlayerSystem::handleRightClick(Game& g, sf::Vector2f world, sf::Vector2f sc
             break;
         }
         case cfg::BuildingType::MeInterface: {
-            // ME接口：打开输出过滤面板（锁定输出物品）
+            // 通物接口：打开输出过滤面板（锁定输出物品）
             g.ui->showFilterPanel(e);
             break;
         }
         case cfg::BuildingType::MeDrive:
         case cfg::BuildingType::MeTerminal: {
-            // ME存储/终端：打开网络物品清单（AE2终端式）
+            // 通物存储/终端：打开网络物品清单（通物终端式）
             g.ui->showMePanel(e);
             break;
         }
@@ -224,6 +237,9 @@ void PlayerSystem::handleRightClick(Game& g, sf::Vector2f world, sf::Vector2f sc
         default:
             break;   // 塔/电线杆/电容库/管道/分流器无右键交互
     }
+
+    // 新手引导：右键事件（"调整输出面"等步骤判定）
+    tutorial::onRightClickBuilding(g, b.type);
 }
 
 // ---------------------------------------------------------------------

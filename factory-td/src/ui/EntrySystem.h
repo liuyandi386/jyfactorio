@@ -4,7 +4,7 @@
 //
 // 负责玩家在真正进入游戏之前看到的全部内容：
 //   1) 启动动画（工作室 logo 淡入淡出，可跳过）
-//   2) 标题界面 / 主菜单（开始新游戏·继续游戏·设置·关于·退出）
+//   2) 标题界面 / 主菜单（新手教程·普通关卡·继续游戏·设置·关于·退出）
 //   3) 设置界面（显示模式 / 交互选项，即时生效并持久化）
 //   4) 加载界面（真实执行配置读取·存档校验·路径预生成，带进度条）
 // 结束后把玩家的选择（EntryAction）交回 main.cpp，由其创建 Game。
@@ -19,9 +19,11 @@
 #include <SFML/Graphics.hpp>
 
 /// 入口流程的最终结果
+/// 注意：Tutorial 与 NewGame 是两种完全独立的模式入口，互不为前置/子模式
 enum class EntryAction {
-    NewGame,   // 开始新游戏（从头开始）
-    Continue,  // 继续游戏（读取存档）
+    Tutorial,  // 新手教程：独立教学关卡（独立的引导流程）
+    NewGame,   // 普通关卡 · 开始新游戏（从头开始）
+    Continue,  // 普通关卡 · 继续游戏（读取存档）
     Quit       // 退出游戏
 };
 
@@ -119,7 +121,7 @@ private:
     int menuHover = -1;        // 鼠标悬停
     bool hasSaveFile = false;
     std::string saveSummary;   // 存档摘要（大小）
-    bool startNewGame = true;  // 加载结束后要执行的动作
+    EntryAction pendingAction = EntryAction::NewGame;  // 加载结束后要执行的动作（教程/新游戏/继续）
 
     // ---- 设置 ----
     int settingRow = 0;

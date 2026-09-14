@@ -31,6 +31,14 @@ struct Machine {
     float rate = cfg::MINER_RATE_L1;   // 产出速率(个/秒)
     float acc = 0.0f;           // 产出累加器（小数部分跨帧保留）
 
+    // ---- 采矿场模式（右键面板可切换，两种模式产量规则完全一致） ----
+    //   false = 原有模式：在半径内所有矿点中按储量随机采集（行为与旧版完全一致）
+    //   true  = 固定矿点模式：吸附在矿点旁边，只采集 oreFilter 指定矿种的那一个矿点
+    bool fixedOre = false;              // 是否固定矿点模式
+    cfg::ItemType oreFilter = cfg::ItemType::IronOre; // 固定矿点模式：只采该矿种
+    bool hasBound = false;              // 是否已绑定矿点
+    int boundX = -1, boundY = -1;       // 绑定矿点的网格坐标
+
     // ---- 熔炉/组装机/合金炉 ----
     float craftTimer = 0.0f;   // 组装机合成计时器（到达周期即合成一次）
     float progress = 0.0f;     // 当前生产进度(0~1)，用于进度条显示

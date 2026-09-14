@@ -1,5 +1,21 @@
 @echo off
 rem =====================================================================
+rem ENCODING GUARD - DO NOT EDIT OR REMOVE THE BLOCK BELOW
+rem   This file must stay UTF-8 (no BOM) with CRLF line endings. Chinese text
+rem   written directly into a .bat file makes cmd.exe mis-parse it, and LF-only
+rem   line endings make cmd.exe lose track of rem / if-block boundaries. So we
+rem   first run a pure-ASCII guard that switches the console to code page 65001,
+rem   then re-launch this whole file in a child cmd which reads it correctly as
+rem   UTF-8 from byte 0. Keep every byte ABOVE this guard pure ASCII (no Chinese,
+rem   no full-width punctuation, no quotes), otherwise the guard itself breaks.
+rem =====================================================================
+if not defined __BUILD_U8 (
+    chcp 65001 >nul
+    set "__BUILD_U8=1"
+    cmd /c ""%~f0" %*"
+    exit /b
+)
+rem =====================================================================
 rem build.bat —— factory-td 一键构建脚本（小熊猫C++ MinGW 工具链，已实测通过）
 rem
 rem 依赖获取顺序（CMakeLists 自动探测）：

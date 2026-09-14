@@ -3,6 +3,7 @@
 // =====================================================================
 #include "Settings.h"
 
+#include "GameConfig.h"   // cfg::FPS（「固定 60 帧」档的上限）
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -49,12 +50,17 @@ bool load(const std::string& path) {
                          static_cast<int>(DisplayMode::Count) - 1));
         if (j.contains("show_tooltips"))
             g_settings.showTooltips = j["show_tooltips"].get<bool>();
-        if (j.contains("auto_open_help"))
-            g_settings.autoOpenHelp = j["auto_open_help"].get<bool>();
+        // 旧版 settings.json 的 auto_open_help 已废弃：新手教程改为主菜单独立入口，
+        // 普通关卡不再接入引导系统，因此该键读取后直接忽略
         if (j.contains("camera_speed"))
             g_settings.cameraSpeed = static_cast<CameraSpeed>(
                 clampInt(j["camera_speed"].get<int>(), 0,
                          static_cast<int>(CameraSpeed::Count) - 1));
+        // 旧版本 settings.json 没有 frame_mode：保持默认（垂直同步），不会退回 60 帧限帧
+        if (j.contains("frame_mode"))
+            g_settings.frameMode = static_cast<FrameMode>(
+                clampInt(j["frame_mode"].get<int>(), 0,
+                         static_cast<int>(FrameMode::Count) - 1));
         return true;
     } catch (const std::exception&) {
         // 文件损坏：保留默认值，不打断启动
@@ -76,8 +82,8 @@ bool save(const std::string& path) {
         j["v"] = 1;
         j["display_mode"] = static_cast<int>(g_settings.displayMode);
         j["show_tooltips"] = g_settings.showTooltips;
-        j["auto_open_help"] = g_settings.autoOpenHelp;
         j["camera_speed"] = static_cast<int>(g_settings.cameraSpeed);
+        j["frame_mode"] = static_cast<int>(g_settings.frameMode);
 
         std::ofstream o(path, std::ios::trunc);
         if (!o.good()) return false;
@@ -133,12 +139,49 @@ const char* displayModeName(DisplayMode m) {
     }
 }
 
+const char* frameModeName(FrameMode m) {
+    switch (m) {
+        case FrameMode::Vsync:     return "垂直同步 (跟随显示器刷新率)";
+        case FrameMode::Limit60:   return "固定 60 帧";
+        case FrameMode::Limit120:  return "固定 120 帧";
+        case FrameMode::Limit144:  return "固定 144 帧";
+        case FrameMode::Unlimited: return "不限制";
+        default:                   return "垂直同步 (跟随显示器刷新率)";
+    }
+}
+
+// ---------------------------------------------------------------------
+// 帧率 / 垂直同步（全项目唯一应用点）
+// ---------------------------------------------------------------------
+void applyFrameMode(sf::RenderWindow& window) {
+    // ⚠ SFML 的这两个 setter 互相拆台，必须"先全关、再只开一个"：
+    //   setFramerateLimit(>0)     → 内部调用 setVerticalSyncEnabled(false)
+    //   setVerticalSyncEnabled(true) → 内部调用 setFramerateLimit(0)
+    // 顺序反了就会出现"设了垂直同步却仍是 60 帧"之类的诡异现象。
+    window.setVerticalSyncEnabled(false);
+    window.setFramerateLimit(0);
+
+    switch (g_settings.frameMode) {
+        case FrameMode::Vsync:
+            // 垂直同步：present 由显示器刷新节奏驱动，144Hz 屏即 144 帧。
+            // 由驱动阻塞而非 sf::sleep 空转，不会出现交换链饥饿导致的黑屏。
+            window.setVerticalSyncEnabled(true);
+            break;
+        case FrameMode::Limit60:   window.setFramerateLimit(cfg::FPS); break;
+        case FrameMode::Limit120:  window.setFramerateLimit(120); break;
+        case FrameMode::Limit144:  window.setFramerateLimit(144); break;
+        case FrameMode::Unlimited: break;   // 两者都不设 = 跑满
+        default:                   window.setVerticalSyncEnabled(true); break;
+    }
+}
+
 // ---------------------------------------------------------------------
 // 设置项（启动菜单 与 游戏内暂停面板 共用）
 // ---------------------------------------------------------------------
 const char* settingRowLabel(int row) {
     static const char* const kLabels[SETTING_ROW_COUNT] = {
-        "显示模式", "悬停提示", "新手引导", "摄像机速度", "恢复默认设置", "返回",
+        "显示模式", "悬停提示", "摄像机速度", "帧率 / 垂直同步",
+        "恢复默认设置", "返回",
     };
     return (row >= 0 && row < SETTING_ROW_COUNT) ? kLabels[row] : "";
 }
@@ -148,8 +191,8 @@ std::string settingRowValue(int row) {
     switch (row) {
         case 0: return displayModeName(g_settings.displayMode);
         case 1: return g_settings.showTooltips ? "开启" : "关闭";
-        case 2: return g_settings.autoOpenHelp ? "开启" : "关闭";
-        case 3: return kSpeedNames[clampInt(static_cast<int>(g_settings.cameraSpeed), 0, 2)];
+        case 2: return kSpeedNames[clampInt(static_cast<int>(g_settings.cameraSpeed), 0, 2)];
+        case 3: return frameModeName(g_settings.frameMode);
         default: return "";   // 4/5 为动作行，无取值文本
     }
 }
@@ -159,6 +202,7 @@ bool settingRowIsAction(int row) { return row == 4 || row == 5; }
 bool cycleSettingRow(int row, int dir) {
     const int dc = static_cast<int>(DisplayMode::Count);
     const int cc = static_cast<int>(CameraSpeed::Count);
+    const int fc = static_cast<int>(FrameMode::Count);
     switch (row) {
         case 0: {   // 显示模式（切换后需重建窗口才能看到效果）
             int m = static_cast<int>(g_settings.displayMode) + dir;
@@ -168,11 +212,17 @@ bool cycleSettingRow(int row, int dir) {
             return true;
         }
         case 1: g_settings.showTooltips = !g_settings.showTooltips; save(); break;
-        case 2: g_settings.autoOpenHelp = !g_settings.autoOpenHelp; save(); break;
-        case 3: {
+        case 2: {
             int c = static_cast<int>(g_settings.cameraSpeed) + dir;
             c = (c % cc + cc) % cc;
             g_settings.cameraSpeed = static_cast<CameraSpeed>(c);
+            save();
+            break;
+        }
+        case 3: {   // 帧率/垂直同步：不需要重建窗口，调用方用 applyFrameMode 即时生效
+            int f = static_cast<int>(g_settings.frameMode) + dir;
+            f = (f % fc + fc) % fc;
+            g_settings.frameMode = static_cast<FrameMode>(f);
             save();
             break;
         }

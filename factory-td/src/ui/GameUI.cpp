@@ -11,7 +11,9 @@
 #include "Game.h"
 #include "Settings.h"
 #include "systems/ItemSystem.h"
+#include "systems/MachineSystem.h"
 #include "systems/MeSystem.h"
+#include "systems/TutorialSystem.h"
 #include "components/Machine.h"
 #include "components/Me.h"
 #include "components/Power.h"
@@ -56,7 +58,7 @@ sf::Color buildingCategoryColor(cfg::BuildingType t) {
         case cfg::BuildingType::Splitter:       return sf::Color(0, 200, 220);   // 青
         case cfg::BuildingType::MeInterface:
         case cfg::BuildingType::MeDrive:
-        case cfg::BuildingType::MeTerminal:     return sf::Color(0, 220, 255);   // 亮青(AE2)
+        case cfg::BuildingType::MeTerminal:     return sf::Color(0, 220, 255);   // 通物亮青
         default: return UI_BORDER;
     }
 }
@@ -169,14 +171,19 @@ bool GameUI::handleEvent(const sf::Event& e) {
 
     // 世界地图激活时：所有点击由地图层处理（仅关闭）
     if (worldMapOpen_) { worldMapOpen_ = false; return true; }
-    // ME网络面板激活时：面板内点击无操作，外部点击关闭
+    // 通物网络面板激活时：面板内点击无操作，外部点击关闭
     if (mePanelActive_) {
         if (!mePanelRect_.contains(pos)) hideMePanel();
         return true;
     }
-    // ME接口过滤面板激活时：所有点击由过滤面板处理
+    // 通物接口过滤面板激活时：所有点击由过滤面板处理
     if (filterPanelActive_) {
         handleFilterPanelClick(pos);
+        return true;
+    }
+    // 采矿场设置面板激活时：所有点击由面板处理
+    if (minerPanelActive()) {
+        handleMinerPanelClick(pos);
         return true;
     }
     // 商店/随身工作台面板激活时：所有点击由面板处理（模态）
@@ -327,6 +334,13 @@ void GameUI::showToast(const std::string& msg) {
     toastTimer_ = cfg::ui::TOAST_DURATION;
 }
 
+void GameUI::showComms(const std::string& speaker, const std::string& text) {
+    // 叙事通道独立于 Toast：保存成功之类的系统提示不会把台词挤掉
+    commsSpeaker_ = speaker;
+    commsText_ = text;
+    commsTimer_ = cfg::ui::COMMS_DURATION;
+}
+
 void GameUI::showDirectionPopup(cfg::BuildingType b, sf::Vector2i tile, sf::Vector2f screen) {
     popupActive_ = true;
     popupBuilding_ = b;
@@ -372,6 +386,7 @@ void GameUI::setTooltip(const std::string& title, const std::vector<std::string>
 
 void GameUI::update(float dt) {
     if (toastTimer_ > 0.0f) toastTimer_ -= dt;
+    if (commsTimer_ > 0.0f) commsTimer_ -= dt;
     // 小地图节流重建（0.3秒一次；世界地图打开时同样节流）
     minimapTimer_ -= dt;
     if (minimapTimer_ <= 0.0f) {
@@ -438,6 +453,7 @@ void GameUI::draw(sf::RenderTarget& rt) {
     drawResourceBar(rt);
     drawSidePanel(rt);
     if (toastTimer_ > 0.0f) drawToast(rt);
+    if (commsTimer_ > 0.0f) drawComms(rt);   // 织女星通讯 / 开发日志
     if (popupActive_) drawDirectionPopup(rt);
     if (recipePopupActive_) drawRecipePopup(rt);
     if (shopOpen_) drawShop(rt);
@@ -449,6 +465,9 @@ void GameUI::draw(sf::RenderTarget& rt) {
     else drawMinimap(rt);
     if (mePanelActive_) drawMePanel(rt);
     if (filterPanelActive_) drawFilterPanel(rt);
+    if (minerPanelActive()) drawMinerPanel(rt);
+    // 新手引导层（非模态，位于说明书/暂停面板之下）——仅新手教程模式存在
+    if (g_->mode == GameMode::Tutorial) tutorial::drawOverlay(*g_, rt);
     if (helpOpen_) drawHelp(rt);   // 说明书置顶
     if (pausePanelOpen_) drawPausePanel(rt);   // 暂停面板最顶层
 }
@@ -821,10 +840,12 @@ void GameUI::rebuildWorldMap() {
     for (auto [e, pos, ore] : g_->reg.view<GridPos, OreDeposit>().each()) {
         const sf::Color c = ItemSystem::color(ore.type);
         const float s = 1.6f;
-        ores.append(sf::Vertex({pos.x, pos.y}, c));
-        ores.append(sf::Vertex({pos.x + s, pos.y}, c));
-        ores.append(sf::Vertex({pos.x + s, pos.y + s}, c));
-        ores.append(sf::Vertex({pos.x, pos.y + s}, c));
+        const float ox = static_cast<float>(pos.x);
+        const float oy = static_cast<float>(pos.y);
+        ores.append(sf::Vertex({ox, oy}, c));
+        ores.append(sf::Vertex({ox + s, oy}, c));
+        ores.append(sf::Vertex({ox + s, oy + s}, c));
+        ores.append(sf::Vertex({ox, oy + s}, c));
     }
     worldmap_.draw(ores);
     // 敌人
@@ -883,7 +904,7 @@ void GameUI::drawWorldMap(sf::RenderTarget& rt) {
 }
 
 // ---------------------------------------------------------------------
-// ME网络物品清单（AE2终端式：右键任意ME设备打开，全网物品只读）
+// 通物网络物品清单（通物终端式：右键任意通物设备打开，全网物品只读）
 // ---------------------------------------------------------------------
 void GameUI::showMePanel(entt::entity e) {
     mePanelActive_ = true;
@@ -907,12 +928,12 @@ void GameUI::drawMePanel(sf::RenderTarget& rt) {
     bg.setOutlineColor(sf::Color(0, 200, 220));
     bg.setOutlineThickness(2.0f);
     rt.draw(bg);
-    // 头部条（青色，AE2式）
+    // 头部条（青色）
     sf::RectangleShape head({panel.width, 32.0f});
     head.setPosition(panel.left, panel.top + 2.0f);
     head.setFillColor(sf::Color(0, 140, 165));
     rt.draw(head);
-    drawText(rt, "ME 网络终端", 16, {panel.left + 14.0f, panel.top + 8.0f}, UI_TEXT_LIGHT);
+    drawText(rt, "通物网络 · 终端", 16, {panel.left + 14.0f, panel.top + 8.0f}, UI_TEXT_LIGHT);
 
     const int nid = MeSystem::networkIdOf(*g_, mePanelEntity_);
     if (nid < 0 || nid >= static_cast<int>(MeSystem::networks().size())) {
@@ -944,7 +965,7 @@ void GameUI::drawMePanel(sf::RenderTarget& rt) {
 }
 
 // ---------------------------------------------------------------------
-// ME接口过滤面板（点选锁定输出物品，白名单）
+// 通物接口过滤面板（点选锁定输出物品，白名单）
 // ---------------------------------------------------------------------
 void GameUI::showFilterPanel(entt::entity e) {
     filterPanelActive_ = true;
@@ -991,7 +1012,7 @@ void GameUI::drawFilterPanel(sf::RenderTarget& rt) {
     head.setPosition(panel.left, panel.top + 2.0f);
     head.setFillColor(sf::Color(0, 140, 165));
     rt.draw(head);
-    drawText(rt, "ME 接口过滤", 16, {panel.left + 14.0f, panel.top + 9.0f}, UI_TEXT_LIGHT);
+    drawText(rt, "通物接口 · 输出过滤", 16, {panel.left + 14.0f, panel.top + 9.0f}, UI_TEXT_LIGHT);
 
     const bool valid = g_->reg.valid(filterPanelEntity_) &&
                        g_->reg.all_of<MeInterface>(filterPanelEntity_);
@@ -1020,6 +1041,207 @@ void GameUI::drawFilterPanel(sf::RenderTarget& rt) {
     }
     drawText(rt, "锁定物品后仅输出这些物品；全部解锁=输出全部 · 点击外部/ESC关闭", 10,
              {panel.left + panel.width / 2.0f, panel.top + panel.height - 14.0f}, UI_TEXT, true);
+}
+
+// ---------------------------------------------------------------------
+// 采矿场设置面板（右键矿机打开）
+//   原有模式  ：覆盖范围内所有矿点随机采集（旧版行为，产量不变）
+//   固定矿点模式：吸附到矿点旁边，只采指定矿种的那一个矿点（产量不变）
+// ---------------------------------------------------------------------
+void GameUI::showMinerPanel(entt::entity e) {
+    minerPanelEntity_ = e;
+    layoutMinerPanel();
+}
+
+void GameUI::layoutMinerPanel() {
+    const float w = 470.0f;
+    const float pad = 14.0f;
+    const float px = (winW_ - w) / 2.0f;
+    const float py = 110.0f;
+
+    // 模式按钮（两个并排）
+    const float bw = (w - pad * 2.0f - 10.0f) / 2.0f;
+    minerModeRects_[0] = {px + pad, py + 52.0f, bw, 34.0f};
+    minerModeRects_[1] = {px + pad + bw + 10.0f, py + 52.0f, bw, 34.0f};
+
+    // 矿种筛选按钮（4 列 × 2 行）
+    const float cw = (w - pad * 2.0f - 3.0f * 8.0f) / 4.0f;
+    const float ch = 28.0f;
+    const float gy = py + 132.0f;
+    for (int i = 0; i < 8; ++i) {
+        const int row = i / 4, col = i % 4;
+        minerOreRects_[static_cast<size_t>(i)] = {
+            px + pad + col * (cw + 8.0f), gy + row * (ch + 8.0f), cw, ch};
+    }
+
+    // 底部：旋转输出面 / 关闭
+    const float by = gy + 2.0f * (ch + 8.0f) + 14.0f;
+    minerRotateRect_ = {px + pad, by, bw, 30.0f};
+    minerCloseRect_ = {px + pad + bw + 10.0f, by, bw, 30.0f};
+    minerPanelRect_ = {px, py, w, (by + 30.0f + 46.0f) - py};
+}
+
+void GameUI::handleMinerPanelClick(sf::Vector2f pos) {
+    const entt::entity e = minerPanelEntity_;
+    if (!g_->reg.valid(e) || !g_->reg.all_of<Building, Machine>(e)) {
+        hideMinerPanel();          // 面板所指向的采矿场已不存在
+        return;
+    }
+    if (!minerPanelRect_.contains(pos)) { hideMinerPanel(); return; }
+    auto& m = g_->reg.get<Machine>(e);
+    if (minerCloseRect_.contains(pos)) { hideMinerPanel(); return; }
+    if (minerRotateRect_.contains(pos)) {
+        MinerSystem::rotateOutputFace(*g_, e);   // 贴图与输出面同步旋转
+        return;
+    }
+    if (m.voidMiner) return;   // 虚空采矿场无需矿点，模式/矿种不可选
+
+    // ---- 模式切换 ----
+    for (int i = 0; i < 2; ++i) {
+        if (!minerModeRects_[static_cast<size_t>(i)].contains(pos)) continue;
+        const bool fixed = (i == 1);
+        if (fixed && !MinerSystem::setFixedMode(*g_, e, true)) {
+            showToast("覆盖范围内没有矿点，无法启用固定矿点模式");
+        } else {
+            if (!fixed) MinerSystem::setFixedMode(*g_, e, false);
+            showToast(fixed ? "固定矿点模式：已吸附到矿点旁边，只采所选矿种"
+                            : "原有模式：覆盖范围内所有矿点随机采集");
+        }
+        layoutMinerPanel();   // 信息行内容变化，重新布局
+        return;
+    }
+
+    // ---- 矿种选择（固定矿点模式下会立即重新绑定/吸附） ----
+    for (int i = 0; i < 8; ++i) {
+        if (!minerOreRects_[static_cast<size_t>(i)].contains(pos)) continue;
+        const cfg::ItemType ore = cfg::ORE_TYPES[static_cast<size_t>(i)];
+        if (!MinerSystem::setOreFilter(*g_, e, ore) && m.fixedOre)
+            showToast(std::string("覆盖范围内没有") + ItemSystem::nameZh(ore) + "矿点");
+        return;
+    }
+}
+
+void GameUI::drawMinerPanel(sf::RenderTarget& rt) {
+    if (!minerPanelActive()) return;
+    const entt::entity e = minerPanelEntity_;
+    if (!g_->reg.valid(e) || !g_->reg.all_of<Building, Machine>(e)) return;
+    const auto& b = g_->reg.get<Building>(e);
+    auto& m = g_->reg.get<Machine>(e);
+    const auto& panel = minerPanelRect_;
+
+    // 背景 + 标题栏
+    sf::RectangleShape bg({panel.width, panel.height});
+    bg.setPosition(panel.left, panel.top);
+    bg.setFillColor(sf::Color(26, 34, 38, 246));
+    bg.setOutlineColor(sf::Color(0, 190, 170));
+    bg.setOutlineThickness(2.0f);
+    rt.draw(bg);
+    sf::RectangleShape head({panel.width, 40.0f});
+    head.setPosition(panel.left, panel.top + 2.0f);
+    head.setFillColor(sf::Color(0, 122, 112));
+    rt.draw(head);
+    {
+        char t[64];
+        std::snprintf(t, sizeof(t), "采矿场设置 · %s", m.voidMiner ? "虚空型" : "Lv");
+        std::string title = t;
+        if (!m.voidMiner) title += std::to_string(m.level);
+        drawText(rt, title, 16, {panel.left + 14.0f, panel.top + 12.0f}, UI_TEXT_LIGHT);
+    }
+
+    if (m.voidMiner) {
+        drawText(rt, "虚空采矿场无需矿点，自动轮流产出全部 8 种矿石。", 13,
+                 {panel.left + 14.0f, panel.top + 68.0f}, UI_TEXT);
+    } else {
+        // ---- 模式按钮 ----
+        const char* modeNames[2] = {"原有模式", "固定矿点模式"};
+        for (int i = 0; i < 2; ++i) {
+            const auto& r = minerModeRects_[static_cast<size_t>(i)];
+            const bool active = (i == 1) ? m.fixedOre : !m.fixedOre;
+            sf::RectangleShape btn({r.width, r.height});
+            btn.setPosition(r.left, r.top);
+            btn.setFillColor(active ? sf::Color(0, 130, 115) : sf::Color(34, 42, 48));
+            btn.setOutlineColor(active ? sf::Color(0, 230, 200) : sf::Color(70, 78, 86));
+            btn.setOutlineThickness(active ? 2.0f : 1.0f);
+            rt.draw(btn);
+            drawText(rt, modeNames[i], 13, {r.left + r.width / 2.0f, r.top + 9.0f},
+                     active ? UI_TEXT_LIGHT : UI_TEXT, true);
+        }
+
+        // ---- 矿种筛选按钮 ----
+        drawText(rt, "目标矿种（固定矿点模式生效）", 12,
+                 {panel.left + 14.0f, panel.top + 100.0f}, UI_TEXT);
+        for (int i = 0; i < 8; ++i) {
+            const auto& r = minerOreRects_[static_cast<size_t>(i)];
+            const cfg::ItemType ore = cfg::ORE_TYPES[static_cast<size_t>(i)];
+            const bool active = m.fixedOre && (m.oreFilter == ore);
+            const bool avail = MinerSystem::hasOreInRange(*g_, b, m, ore);
+            sf::RectangleShape btn({r.width, r.height});
+            btn.setPosition(r.left, r.top);
+            btn.setFillColor(active ? sf::Color(0, 120, 108)
+                                    : (avail ? sf::Color(32, 40, 46) : sf::Color(28, 30, 32)));
+            btn.setOutlineColor(active ? sf::Color(0, 230, 200) : sf::Color(64, 72, 80));
+            btn.setOutlineThickness(active ? 1.5f : 1.0f);
+            rt.draw(btn);
+            sf::RectangleShape icon({10.0f, 10.0f});
+            icon.setPosition(r.left + 6.0f, r.top + 9.0f);
+            icon.setFillColor(ItemSystem::color(ore));
+            rt.draw(icon);
+            drawText(rt, ItemSystem::nameZh(ore), 12, {r.left + 20.0f, r.top + 7.0f},
+                     avail ? (active ? UI_TEXT_LIGHT : UI_TEXT) : sf::Color(118, 122, 128));
+        }
+    }
+
+    // ---- 底部按钮 ----
+    {
+        sf::RectangleShape btn({minerRotateRect_.width, minerRotateRect_.height});
+        btn.setPosition(minerRotateRect_.left, minerRotateRect_.top);
+        btn.setFillColor(sf::Color(40, 48, 56));
+        btn.setOutlineColor(UI_BORDER_LIGHT);
+        btn.setOutlineThickness(1.0f);
+        rt.draw(btn);
+        drawText(rt, "旋转输出面", 13,
+                 {minerRotateRect_.left + minerRotateRect_.width / 2.0f,
+                  minerRotateRect_.top + 8.0f}, UI_TEXT, true);
+
+        sf::RectangleShape btn2({minerCloseRect_.width, minerCloseRect_.height});
+        btn2.setPosition(minerCloseRect_.left, minerCloseRect_.top);
+        btn2.setFillColor(sf::Color(60, 42, 42));
+        btn2.setOutlineColor(sf::Color(150, 90, 90));
+        btn2.setOutlineThickness(1.0f);
+        rt.draw(btn2);
+        drawText(rt, "关闭", 13,
+                 {minerCloseRect_.left + minerCloseRect_.width / 2.0f,
+                  minerCloseRect_.top + 8.0f}, UI_TEXT_LIGHT, true);
+    }
+
+    // ---- 结算信息（两种模式的"采多少"完全一致，这里如实展示） ----
+    {
+        char line[192];
+        std::snprintf(line, sizeof(line), "采集速率 %.0f 个/秒 · 覆盖半径 %d 格 · 每轮结算 1 个",
+                      static_cast<double>(m.rate), MinerSystem::radiusOf(m));
+        const float y = minerPanelRect_.top + minerPanelRect_.height - 40.0f;
+        drawText(rt, line, 11, {panel.left + 14.0f, y}, UI_TEXT);
+
+        std::string stat;
+        if (m.voidMiner) {
+            stat = "产出：8 种矿石轮流产出（总量不变）";
+        } else if (!m.fixedOre) {
+            stat = "原有模式：覆盖范围内全部矿点随机采集（与旧版一致）";
+        } else {
+            const entt::entity oe = MinerSystem::boundDeposit(*g_, b, m);
+            if (oe != entt::null) {
+                const auto& pos = g_->reg.get<GridPos>(oe);
+                const auto& dep = g_->reg.get<OreDeposit>(oe);
+                std::snprintf(line, sizeof(line), "绑定矿点：%s (%d,%d) 剩余 %d",
+                              ItemSystem::nameZh(dep.type), pos.x, pos.y, dep.amount);
+                stat = line;
+            } else {
+                stat = "绑定矿点：无（范围内已无该矿种，采尽后自动切换同矿种矿点）";
+            }
+        }
+        drawText(rt, stat, 11, {panel.left + 14.0f, y + 16.0f},
+                 m.fixedOre ? sf::Color(120, 220, 200) : UI_TEXT);
+    }
 }
 
 void GameUI::drawResourceBar(sf::RenderTarget& rt) {
@@ -1172,6 +1394,51 @@ void GameUI::drawToast(sf::RenderTarget& rt) {
     rt.draw(border);
     drawText(rt, toast_, 18, {x + w / 2.0f, 80.0f + h / 2.0f - 10.0f},
              sf::Color(255, 255, 255, static_cast<uint8_t>(255.0f * alpha)), true);
+}
+
+void GameUI::drawComms(sf::RenderTarget& rt) {
+    // 最后 0.6 秒淡出
+    float alpha = 1.0f;
+    if (commsTimer_ < 0.6f) alpha = commsTimer_ / 0.6f;
+    const auto fade = [alpha](int v) {
+        return static_cast<uint8_t>(static_cast<float>(v) * alpha);
+    };
+
+    // 正文实测宽度：通讯条随内容伸缩，短句不空、长句换行前先放宽
+    sf::Text probe;
+    probe.setFont(g_->assets.font());
+    probe.setCharacterSize(15);
+    probe.setString(sf::String::fromUtf8(commsText_.begin(), commsText_.end()));
+    const float textW = probe.getLocalBounds().width;
+
+    const float area = winW_ - static_cast<float>(cfg::ui::SIDE_PANEL_WIDTH);
+    float w = std::max(380.0f, textW + 150.0f);
+    w = std::min(w, std::max(320.0f, area - 40.0f));
+    const float h = 62.0f;
+    // 贴世界区域右下角：左下是小地图、右侧是建筑面板，这里不遮任何常驻信息
+    const float x = area - w - 14.0f;
+    const float y = winH_ - h - 14.0f;
+
+    sf::RectangleShape bg({w, h});
+    bg.setPosition(x, y);
+    bg.setFillColor(sf::Color(16, 28, 34, fade(238)));
+    rt.draw(bg);
+
+    sf::RectangleShape border({w, h});
+    border.setPosition(x, y);
+    border.setFillColor(sf::Color::Transparent);
+    border.setOutlineColor(sf::Color(0, 190, 215, fade(230)));
+    border.setOutlineThickness(1.5f);
+    rt.draw(border);
+
+    // 左侧信号条：一眼看出这是"通讯"，不是系统报错
+    sf::RectangleShape sig({3.0f, h});
+    sig.setPosition(x, y);
+    sig.setFillColor(sf::Color(0, 210, 235, fade(255)));
+    rt.draw(sig);
+
+    drawText(rt, commsSpeaker_, 12, {x + 14.0f, y + 9.0f}, sf::Color(120, 210, 235, fade(255)));
+    drawText(rt, commsText_, 15, {x + 14.0f, y + 30.0f}, sf::Color(232, 238, 244, fade(255)));
 }
 
 void GameUI::drawDirectionPopup(sf::RenderTarget& rt) {
@@ -1403,13 +1670,21 @@ void GameUI::handlePauseKey(const sf::Event::KeyEvent& k) {
             case K::Down: case K::S:
                 pauseSettingRow_ = (pauseSettingRow_ + 1) % N; break;
             case K::Left: case K::A:
-                if (gset::cycleSettingRow(pauseSettingRow_, -1)) pauseDisplayApply_ = true; break;
+                if (gset::cycleSettingRow(pauseSettingRow_, -1)) pauseDisplayApply_ = true;
+                else if (pauseSettingRow_ == gset::SETTING_ROW_FRAME_MODE)
+                    gset::applyFrameMode(g_->window);
+                break;
             case K::Right: case K::D:
-                if (gset::cycleSettingRow(pauseSettingRow_, 1)) pauseDisplayApply_ = true; break;
+                if (gset::cycleSettingRow(pauseSettingRow_, 1)) pauseDisplayApply_ = true;
+                else if (pauseSettingRow_ == gset::SETTING_ROW_FRAME_MODE)
+                    gset::applyFrameMode(g_->window);
+                break;
             case K::Enter: case K::Space: {
                 const auto r = gset::activateSettingRow(pauseSettingRow_);
                 if (r == gset::SettingActivate::DisplayChanged) pauseDisplayApply_ = true;
                 else if (r == gset::SettingActivate::Back) pauseSettingsOpen_ = false;
+                else if (pauseSettingRow_ == gset::SETTING_ROW_FRAME_MODE)
+                    gset::applyFrameMode(g_->window);
                 break;
             }
             case K::Escape: pauseSettingsOpen_ = false; break;   // 设置 → 返回暂停面板
@@ -1436,6 +1711,7 @@ void GameUI::handlePauseClick(sf::Vector2f pos) {
                 const auto r = gset::activateSettingRow(i);
                 if (r == gset::SettingActivate::DisplayChanged) pauseDisplayApply_ = true;
                 else if (r == gset::SettingActivate::Back) pauseSettingsOpen_ = false;
+                else if (i == gset::SETTING_ROW_FRAME_MODE) gset::applyFrameMode(g_->window);
             } else {
                 pauseSettingRow_ = i;
             }
@@ -1524,7 +1800,7 @@ void GameUI::drawPauseSettings(sf::RenderTarget& rt) {
 }
 
 // =====================================================================
-// 游戏说明书 / 新手引导（H 或 F1 打开；新游戏首次进入自动弹出）
+// 游戏说明书（H 或 F1 打开；新手教程模式另有一套分步旁白，见 TutorialSystem）
 //
 // TODO.md 诉求："README 没人看，做一个 UI 版说明书"。
 // 面板分 6 个标签页，内容随 config.json 数值变化保持定性描述（不写死数值）。
@@ -1538,7 +1814,7 @@ struct HelpLine {
 };
 
 /// 说明书标签页名称（与 helpTab_ 对应）
-const char* const HELP_TAB_NAMES[6] = {"新手引导", "操作按键", "建筑一览",
+const char* const HELP_TAB_NAMES[6] = {"开局指引", "操作按键", "建筑一览",
                                        "生产与物流", "电力系统", "常见问题"};
 constexpr int HELP_TAB_COUNT = 6;
 
@@ -1564,9 +1840,9 @@ const char* buildingHelp(cfg::BuildingType t) {
         case cfg::BuildingType::Bucket:        return "储物桶：容量极大，每0.5秒按输出面吐出一个物品";
         case cfg::BuildingType::Splitter:      return "分流器：把物品轮询均分给多个出口，均分产线";
         case cfg::BuildingType::AlloyFurnace:  return "合金炉：右键选定合金配方，锭→合金，无需电力";
-        case cfg::BuildingType::MeInterface:   return "ME接口：吸入物品入网/导出物品出网，右键可锁定输出物品";
-        case cfg::BuildingType::MeDrive:       return "ME存储单元：每块为网络提供20000容量，叠加生效";
-        case cfg::BuildingType::MeTerminal:    return "ME终端：右键查看整个网络的物品清单";
+        case cfg::BuildingType::MeInterface:   return "通物接口：吸入物品入网/导出物品出网，右键可锁定输出物品";
+        case cfg::BuildingType::MeDrive:       return "通物存储单元：每块为网络提供20000容量，叠加生效";
+        case cfg::BuildingType::MeTerminal:    return "通物终端：右键查看整个网络的物品清单";
         default:                               return "";
     }
 }
@@ -1599,7 +1875,7 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             p("按 0 放燃煤发电机（烧煤）→ 用 9 电线杆或 = 电力线缆把电送出去。");
             p("线缆四面可独立配置，右键点线缆逐面切换 无/输入/传输/输出。");
             h("◆ 第 7 步 · 进阶物流（中后期）");
-            p("用电路板 + 钢锭造 ME 接口 / 存储单元 / 终端：物品数字化入网，全网共享。");
+            p("用电路板 + 钢锭造通物接口 / 存储单元 / 终端：物品接入通物网络，全网共享。");
             p("建成后物流瓶颈基本消失，可以放心大规模扩产。");
             h("◆ 常用按键");
             p("B 商店 · V 工作台 · M 世界地图 · H 本说明 · F5 保存 / F9 读取 · 空格暂停 · DEL 拆除");
@@ -1614,7 +1890,7 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             h("◆ 右键能做什么");
             p("采矿场：旋转输出面 · 组装机/合金炉：打开配方菜单");
             p("电线 / 熔炉 / 储物桶 / 发电机：打开面配置编辑器");
-            p("ME接口：输出过滤 · ME存储单元 / ME终端：查看网络物品清单");
+            p("通物接口：输出过滤 · 通物存储单元 / 通物终端：查看网络物品清单");
             p("管道 / 分流器：自动链接四邻，无需任何操作");
             h("◆ 面板");
             p("B 商店 · V 随身工作台 · M 世界地图 · H / F1 说明书 · F5 保存 · F9 读取 · ESC 关闭");
@@ -1659,8 +1935,8 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             h("◆ 前期物流：物品管道");
             p("自动链接四邻，每隔一小段时间把缓冲里的物品送到最近的可接收端点。");
             p("送不出去就留在管道里（背压，不会丢失）；机器只拉自己配方需要的原料。");
-            h("◆ 后期物流：ME 网络");
-            p("ME接口吸入/导出物品，ME存储单元提供容量，ME终端右键查看全网物品。");
+            h("◆ 后期物流：通物网络");
+            p("通物接口吸入/导出物品，通物存储单元提供容量，通物终端右键查看全网物品。");
             p("接口 / 存储单元 / 终端任意一台都能作为入网口，全网库存共享、机器直接取料。");
             break;
 
@@ -1691,8 +1967,8 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             h("◆ 电网不通？");
             p("发电机要有煤；线缆面要配成 输入/输出；电线杆之间不超过 150px。");
             p("电容库只储能，不会自己发电。");
-            h("◆ ME 网络存不进去？");
-            p("网络容量来自 ME 存储单元（每块 20000），没有存储单元就存不进物品。");
+            h("◆ 通物网络存不进去？");
+            p("网络容量来自通物存储单元（每块 20000），没有存储单元就存不进物品。");
             h("◆ 商店买的机器在哪？");
             p("进右侧背包上方的机器格，点格子选中即可放置（数字键同样可切建筑）。");
             h("◆ 想改数值？");

@@ -3,9 +3,10 @@
 // Camera.h —— 摄像机
 //
 // 移植自 Python core/Camera.py：
-//   - WASD 移动（速度 CAMERA_SPEED，除以缩放使缩小时移动更慢）
+//   - WASD 移动（速度 CAMERA_SPEED_PER_SEC 像素/秒，除以缩放使缩小时移动更慢）
 //   - 滚轮缩放 ZOOM_MIN ~ ZOOM_MAX，步长 ZOOM_SPEED
-//   - 位置平滑插值(系数0.1)，坐标只钳制 >= 0（地图左上角）
+//   - 位置平滑插值(速率 CAMERA_SMOOTH_RATE /秒)，坐标只钳制 >= 0（地图左上角）
+//   - 全部按 dt 计算：60Hz / 144Hz / 165Hz 下移动手感完全一致
 //   - world_to_screen / screen_to_world 坐标变换
 // =====================================================================
 #include <algorithm>
@@ -17,11 +18,11 @@ public:
     /// 初始化摄像机：定位到地图中心（Python行为）
     void init();
 
-    /// 每帧更新：平滑逼近目标位置并钳制边界
-    void update();
+    /// 每帧更新：平滑逼近目标位置并钳制边界（dt = 上一帧耗时，单位秒）
+    void update(float dt);
 
-    /// 移动摄像机目标（dx/dy为WASD归一化方向）
-    void move(float dx, float dy);
+    /// 移动摄像机目标（dx/dy为WASD归一化方向，dt = 上一帧耗时，单位秒）
+    void move(float dx, float dy, float dt);
 
     /// 滚轮缩放
     void zoomIn()  { zoom = std::min(zoom + cfg::ZOOM_SPEED, cfg::ZOOM_MAX); }

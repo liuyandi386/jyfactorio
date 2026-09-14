@@ -17,6 +17,7 @@
 #include "systems/EnemySystem.h"
 #include "systems/ItemSystem.h"
 #include "systems/PlayerSystem.h"
+#include "systems/Narrative.h"
 #include "systems/RenderSystem.h"
 #include "SaveSystem.h"
 #include "Settings.h"
@@ -26,7 +27,7 @@
 // ---------------------------------------------------------------------
 // 构造 / 析构
 // ---------------------------------------------------------------------
-Game::Game() {
+Game::Game(GameMode m) : mode(m) {
     // 按启动菜单里选择的显示模式创建窗口（窗口化分辨率 / 无边框全屏）
     // 统一走 gset::applyToWindow：全屏用无边框窗口实现，不用独占全屏（避免闪屏黑屏/鼠标漂移）
     gset::applyToWindow(window, cfg::SCREEN_TITLE);
@@ -58,13 +59,30 @@ Game::Game() {
     initPlayerInventory();
     enemyWaypoints = buildPixelWaypoints(cfg::PATH_POINTS, cfg::TILE_SIZE);
 
-    // 帧率限制（Python clock.tick(60)）
-    window.setFramerateLimit(cfg::FPS);
+    // 帧率/垂直同步：统一走 gset::applyFrameMode（默认垂直同步 → 跟随显示器刷新率，
+    // 144Hz 屏即 144 帧；旧的 setFramerateLimit(60) 会强制关掉垂直同步并锁 60 帧）
+    gset::applyFrameMode(window);
 
-    // 新手引导：没有存档 = 新游戏，首次进入自动弹出说明书
-    // （F5 保存过之后下次启动不再自动弹出，随时可用 H / F1 重新打开）
-    // 可在启动菜单的"设置 → 新手引导"里关闭该行为
-    if (gset::get().autoOpenHelp && !hasSave()) ui->openHelp(0);
+    // ---- 模式化入口（两种模式完全独立，互不嵌套）----
+    //   · 新手教程：由主菜单「新手教程」按钮进入 → 独立教学关卡
+    //   · 普通关卡：由「普通关卡 / 继续游戏」进入 → 不接入引导系统，也不被 F2 拉起
+    // 引导层是否出现只取决于本局模式（Game::mode），与"是否存在主存档"无关。
+    if (mode == GameMode::Tutorial) {
+        // 教程进度存于独立的 saves/tutorial.json，与主存档 factory_td.json 完全隔离：
+        // 有未完成进度则续接，否则（无进度 / 上次已学完）从第一步重新教起。
+        if (!tutorial::loadProgressFile(tutorial) || !tutorial.active) {
+            tutorial::begin(*this);
+        } else {
+            ui->showToast("新手教程已续接上次进度 · F2 跳过");
+        }
+    }
+
+    // ---- 叙事层：着陆播报（织女星的第一次开口）----
+    // 教程模式自带完整旁白，这里不叠加，避免两套声音打架。
+    narrative::reset();
+    if (mode == GameMode::Normal) {
+        narrative::announce(*this, narrative::Event::Landing);
+    }
 }
 
 Game::~Game() { delete ui; }
@@ -320,15 +338,15 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
             reg.emplace<SplitterQueue>(e);
             break;
         case cfg::BuildingType::MeInterface:
-            // ME接口（AE2式）：桥接物理世界与网络，自动链接四邻ME设备
+            // 通物接口：桥接物理世界与网络，自动链接四邻通物设备
             reg.emplace<MeInterface>(e);
             break;
         case cfg::BuildingType::MeDrive:
-            // ME存储单元：为网络提供容量
+            // 通物存储单元：为网络提供容量
             reg.emplace<MeDrive>(e);
             break;
         case cfg::BuildingType::MeTerminal:
-            // ME终端：右键查看全网物品
+            // 通物终端：右键查看全网物品
             reg.emplace<MeTerminal>(e);
             break;
         default:
@@ -337,7 +355,7 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
 
     registerToGrid(e, b);
 
-    // 管道/分流器/ME设备：刷新自身与四邻的连接掩码（自动链接）
+    // 管道/分流器/通物设备：刷新自身与四邻的连接掩码（自动链接）
     if (t == cfg::BuildingType::Pipe || t == cfg::BuildingType::Splitter ||
         t == cfg::BuildingType::MeInterface || t == cfg::BuildingType::MeDrive ||
         t == cfg::BuildingType::MeTerminal) {
@@ -353,6 +371,11 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
         t == cfg::BuildingType::Capacitor || t == cfg::BuildingType::TowerElectric ||
         t == cfg::BuildingType::AlloyFurnace || isMiner)
         power.dirty = true;
+
+    // 新手引导：记录放置（步骤判定 + 错误纠正）
+    tutorial::onBuildingPlaced(*this, t);
+    // 叙事层：第一座建筑落成（仅普通关卡；教程模式由旁白负责）
+    narrative::announceOnce(*this, narrative::Event::FirstBuild);
     return e;
 }
 
@@ -365,6 +388,42 @@ void Game::registerToGrid(entt::entity e, const Building& b) {
 void Game::unregisterFromGrid(entt::entity e) {
     for (auto& cell : grid.cells)
         if (cell.building == e) cell.building = entt::null;
+}
+
+// ---------------------------------------------------------------------
+// 移动建筑（1×1；供采矿场"固定矿点模式"吸附到矿点旁边使用）
+//   与拆除/放置共用同一套判定（地形 + 占用），失败时保持原位。
+// ---------------------------------------------------------------------
+bool Game::moveBuilding(entt::entity e, int tx, int ty) {
+    if (e == entt::null || !reg.valid(e) || !reg.all_of<Building>(e)) return false;
+    auto& b = reg.get<Building>(e);
+    if (b.pos.x == tx && b.pos.y == ty) return true;
+
+    const int ox = b.pos.x, oy = b.pos.y;
+    unregisterFromGrid(e);                 // 先注销自身占格，再判定目标格
+    bool ok = true;
+    for (int dy = 0; dy < b.h && ok; ++dy)
+        for (int dx = 0; dx < b.w && ok; ++dx) {
+            const int x = tx + dx, y = ty + dy;
+            if (!grid.inBounds(x, y)) { ok = false; break; }
+            if (b.type != cfg::BuildingType::Pipe &&
+                terrain[static_cast<size_t>(y) * grid.w + x] != 0) { ok = false; break; }
+            if (grid.at(x, y).building != entt::null) { ok = false; break; }
+        }
+    if (!ok) {                             // 回滚：恢复原占格
+        registerToGrid(e, b);
+        return false;
+    }
+
+    b.pos = {tx, ty};
+    registerToGrid(e, b);
+
+    // 物流/通物/电网：新旧位置的邻居关系都变了 → 两边都刷新
+    PipeSystem::updateNeighbors(*this, ox, oy);
+    PipeSystem::updateNeighbors(*this, tx, ty);
+    MeSystem::markDirty();
+    power.dirty = true;
+    return true;
 }
 
 // ---------------------------------------------------------------------
@@ -383,7 +442,7 @@ void Game::removeBuilding(entt::entity e, bool refund) {
     const int px = b.pos.x, py = b.pos.y;
     unregisterFromGrid(e);
     reg.destroy(e);
-    // 管道/分流器/ME设备拆除 → 刷新四邻连接掩码（物品留在缓冲/网络中不丢失）
+    // 管道/分流器/通物设备拆除 → 刷新四邻连接掩码（物品留在缓冲/网络中不丢失）
     if (isPipeNode) {
         PipeSystem::updateNeighbors(*this, px, py);
         MeSystem::markDirty();
@@ -441,6 +500,8 @@ void Game::selectBuilding(cfg::BuildingType t) {
     hasSelection = true;
     selected = t;
     ui->selectBuilding(t);
+    // 新手引导：选择事件（用于"选中指定建筑"步骤判定与错误纠正）
+    tutorial::onBuildingSelected(*this, t);
 }
 
 void Game::placeBuildingWithDirection(cfg::BuildingType t, sf::Vector2i tile, int dir) {
@@ -471,11 +532,27 @@ void Game::spawnEnemy() { EnemySystem::spawnEnemy(*this); }
 // 存档
 // ---------------------------------------------------------------------
 void Game::saveGame() {
+    // 教程是独立模式、独立进度（saves/tutorial.json），不写主存档：
+    // 避免教学过程中的临时建造覆盖玩家的普通关卡存档。
+    if (mode == GameMode::Tutorial) {
+        ui->showToast("新手教程模式不保存进度");
+        return;
+    }
     ui->showToast(::saveGame(*this) ? "保存成功!" : "保存失败!");
 }
 
 void Game::loadGame() {
-    ui->showToast(::loadGame(*this) ? "加载成功!" : "没有存档!");
+    if (mode == GameMode::Tutorial) {
+        ui->showToast("新手教程模式不读取存档");
+        return;
+    }
+    if (::loadGame(*this)) {
+        // 普通关卡不承载引导状态（教程是独立模式；旧档可能残留 active 标记）
+        tutorial = tutorial::State{};
+        ui->showToast("加载成功!");
+    } else {
+        ui->showToast("没有存档!");
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -534,15 +611,28 @@ void Game::updateHoverTooltip() {
              b.type != cfg::BuildingType::MinerL3 &&
              b.type != cfg::BuildingType::MinerVoid) || !hit(e)) continue;
         hoveredEntity = e;
-        std::string mode = m.voidMiner ? "全类型矿石(无需矿点)"
-                            : "范围采集(半径" +
-                                  std::to_string(m.level == 2 ? cfg::MINER_RADIUS_L2
-                                               : m.level == 3 ? cfg::MINER_RADIUS_L3
-                                                              : cfg::MINER_RADIUS_L1) + ")";
-        setTip(std::string(cfg::BUILDING_INFOS[static_cast<size_t>(b.type)].nameZh), {
+        const int radius = (m.level == 2) ? cfg::MINER_RADIUS_L2
+                         : (m.level == 3) ? cfg::MINER_RADIUS_L3
+                                          : cfg::MINER_RADIUS_L1;
+        std::string mode;
+        if (m.voidMiner) {
+            mode = "全类型矿石(无需矿点)";
+        } else if (m.fixedOre) {
+            mode = std::string("固定矿点: 仅采") + ItemSystem::nameZh(m.oreFilter);
+        } else {
+            mode = "范围采集(半径" + std::to_string(radius) + ")";
+        }
+        std::string extra;
+        if (!m.voidMiner && m.fixedOre) {
+            extra = "覆盖半径: " + std::to_string(radius) + " 格";
+        }
+        std::vector<std::string> tipLines = {
             "产出: " + std::to_string(static_cast<int>(m.rate)) + " 个/秒",
-            "模式: " + mode,
-            std::string("状态: ") + (m.producing ? "工作中" : "待机")});
+            "模式: " + mode};
+        if (!extra.empty()) tipLines.push_back(extra);
+        tipLines.push_back(std::string("状态: ") + (m.producing ? "工作中" : "待机"));
+        tipLines.push_back("提示: 右键打开设置面板");
+        setTip(std::string(cfg::BUILDING_INFOS[static_cast<size_t>(b.type)].nameZh), tipLines);
         return;
     }
     // 熔炉（数据驱动 FURNACE_RECIPES）
@@ -737,7 +827,7 @@ void Game::updateHoverTooltip() {
                             "自动连接四邻容器/管道，无动画即时传输"});
         return;
     }
-    // ME设备（AE2式网络）
+    // 通物网络设备（接口 / 存储单元 / 终端）
     for (auto [e, b] : reg.view<Building>().each()) {
         const bool isMe = b.type == cfg::BuildingType::MeInterface ||
                           b.type == cfg::BuildingType::MeDrive ||
@@ -745,7 +835,7 @@ void Game::updateHoverTooltip() {
         if (!isMe || !hit(e)) continue;
         hoveredEntity = e;
         const int nid = MeSystem::networkIdOf(*this, e);
-        std::string stat = "未联网";
+        std::string stat = "未接入通物网络";
         if (nid >= 0 && nid < static_cast<int>(MeSystem::networks().size())) {
             const auto& net = MeSystem::networks()[static_cast<size_t>(nid)];
             stat = "物品 " + std::to_string(net.totalItems) + " / 容量 " +
@@ -799,6 +889,8 @@ void Game::processEvents() {
             continue;
         }
 
+        // 新手引导层（横幅上的「跳过引导」按钮）最优先（仅教程模式启用）
+        if (mode == GameMode::Tutorial && tutorial::handleEvent(*this, event)) continue;
         // 优先UI（按钮/方向悬浮窗/面编辑器）
         if (ui->handleEvent(event)) continue;
         // 世界交互（放置/拆除/旋转/摄像机）
@@ -812,7 +904,7 @@ void Game::processEvents() {
 void Game::update(float dt) {
     FT_PROFILE;
     // 1. 摄像机（WASD）
-    PlayerSystem::updateCamera(*this);
+    PlayerSystem::updateCamera(*this, dt);
 
     // 2. 测试版：采矿机免供电（Python"无限资源模式：自动给所有机器供电"）
     if (cfg::MINER_FREE_POWER) {
@@ -827,7 +919,7 @@ void Game::update(float dt) {
     PowerSystem::updateGenerators(*this, dt);
     PowerSystem::update(*this, dt);
 
-    // 5. 物流：ME网络 → 分流器均分 → 管道路由 → 机器拉取原料
+    // 5. 物流：通物网络 → 分流器均分 → 管道路由 → 机器拉取原料
     MeSystem::update(*this, dt);
     PipeSystem::updateSplitters(*this, dt);
     PipeSystem::updatePipes(*this, dt);
@@ -846,13 +938,19 @@ void Game::update(float dt) {
     // 9. 击杀结算（金币）
     EnemySystem::processKills(*this);
 
-    // 10. 波次状态机
-    EnemySystem::updateWaves(*this, dt);
+    // 10. 波次状态机（教程模式不自动出怪：敌人由教学步骤手动生成 Z / X / C）
+    if (mode != GameMode::Tutorial) EnemySystem::updateWaves(*this, dt);
 
     // 11. 悬浮提示 + 放置预览 + UI计时
     updateHoverTooltip();
     PlayerSystem::updatePreview(*this);
     ui->update(dt);
+
+    // 12. 新手引导推进（步骤判定 / 计时 / 反馈动画；仅教程模式）
+    if (mode == GameMode::Tutorial) tutorial::update(*this, dt);
+
+    // 13. 叙事层（织女星定期吐槽公司；教程模式内部自动跳过）
+    narrative::update(*this, dt);
 }
 
 // ---------------------------------------------------------------------
@@ -873,7 +971,7 @@ void Game::render() {
 void Game::applyDisplayMode() {
     const bool wasPaused = paused;   // 面板还开着，重建后保持暂停
     gset::applyToWindow(window, cfg::SCREEN_TITLE);
-    window.setFramerateLimit(cfg::FPS);
+    gset::applyFrameMode(window);   // 窗口重建后必须重新应用（上下文已更换）
     const float w = static_cast<float>(window.getSize().x);
     const float h = static_cast<float>(window.getSize().y);
     camera.setScreenSize(w, h);

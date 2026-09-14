@@ -1,5 +1,5 @@
 // =====================================================================
-// PipeSystem.cpp —— 物品管道系统实现（EnderIO / Pipez / AE2 式）
+// PipeSystem.cpp —— 物品管道系统实现
 //
 // 与旧传送带的区别：
 //   - 取消逐格动画：物品在管道网络内"即时路由"（每个转移周期 BFS
@@ -49,7 +49,7 @@ uint8_t computeMeMask(const Game& g, int x, int y) {
 /// 计算 (x,y) 处管道/分流器的连接掩码（bit d = 该方向是网络节点）
 uint8_t computeMask(const Game& g, int x, int y);
 
-/// 把某实体（管道/分流器/ME设备）的连接掩码重算到其组件
+/// 把某实体（管道/分流器/通物设备）的连接掩码重算到其组件
 void refreshMask(Game& g, entt::entity e, int x, int y) {
     if (g.reg.all_of<Pipe>(e))
         g.reg.get<Pipe>(e).connMask = computeMask(g, x, y);
@@ -100,7 +100,7 @@ bool acceptsItem(const Game& g, entt::entity e, cfg::ItemType item) {
     // 发电机：只收煤矿
     if (g.reg.all_of<PowerGeneratorNode, Inventory>(e))
         return item == cfg::ItemType::Coal && !g.reg.get<Inventory>(e).isFull();
-    // ME设备（接口/存储单元/终端）：网络有容量即收——管道自动连接所有类型容器
+    // 通物设备（接口/存储单元/终端）：网络有容量即收——管道自动连接所有类型容器
     if (g.reg.all_of<MeInterface>(e) || g.reg.all_of<MeDrive>(e) ||
         g.reg.all_of<MeTerminal>(e)) {
         const int nid = MeSystem::networkIdOf(g, e);
@@ -132,7 +132,7 @@ bool deliverItem(Game& g, entt::entity e, cfg::ItemType item) {
         g.reg.all_of<PowerGeneratorNode, Inventory>(e)) {
         return g.reg.get<Inventory>(e).add(item, 1) > 0;
     }
-    // ME设备：物品入网（AE2式数字化存储）
+    // 通物设备：物品入网（数字化存储）
     if (g.reg.all_of<MeInterface>(e) || g.reg.all_of<MeDrive>(e) ||
         g.reg.all_of<MeTerminal>(e)) {
         const int nid = MeSystem::networkIdOf(g, e);
@@ -143,7 +143,7 @@ bool deliverItem(Game& g, entt::entity e, cfg::ItemType item) {
     return false;
 }
 
-// ---- BFS 即时路由（AE2式：有路径即送达） ----
+// ---- BFS 即时路由（有路径即送达） ----
 // 用版本戳避免每帧分配大数组；路径可穿过管道与分流器（分流器为直通节点）
 std::vector<uint32_t> visited_;
 uint32_t stamp_ = 0;
@@ -228,7 +228,7 @@ std::vector<cfg::ItemType> PipeSystem::wantedInputs(const Game& g, const Machine
 }
 
 // ---------------------------------------------------------------------
-// 连接掩码更新（管道/分流器/ME设备 放置与拆除后调用）
+// 连接掩码更新（管道/分流器/通物设备 放置与拆除后调用）
 // ---------------------------------------------------------------------
 void PipeSystem::updateNeighbors(Game& g, int tx, int ty) {
     FT_PROFILE;
@@ -321,7 +321,7 @@ void PipeSystem::updatePipes(Game& g, float dt) {
 }
 
 // ---------------------------------------------------------------------
-// 机器主动拉取（AE2 输入总线式）：只取自己需要的原料，
+// 机器主动拉取（输入总线式）：只取自己需要的原料，
 // 无关物品不会流入机器库存。发电机拉煤，熔炉拉矿，组装机拉配方原料。
 // ---------------------------------------------------------------------
 void PipeSystem::updateMachinePulls(Game& g) {
@@ -360,7 +360,7 @@ void PipeSystem::updateMachinePulls(Game& g) {
             if (inv.totalItems + reserve >= inv.maxSlots * inv.maxStackSize) continue;
         }
 
-        // 从四邻管道/分流器/ME接口各取至多1件所需原料（仅从 INPUT 面）
+        // 从四邻管道/分流器/通物接口各取至多1件所需原料（仅从 INPUT 面）
         int pulled = 0;
         for (int d = 0; d < 4 && pulled < 4; ++d) {
             if (fc.get(d) != cfg::FaceMode::INPUT) continue;   // 输出/无连接面不拉料
@@ -388,7 +388,7 @@ void PipeSystem::updateMachinePulls(Game& g) {
                     pulled++;
                 }
             } else if (g.reg.all_of<MeInterface>(nb)) {
-                // ME接口：从所属网络取料（AE2式全网共享库存），并遵循接口输出过滤
+                // 通物接口：从所属网络取料（全网共享库存），并遵循接口输出过滤
                 const auto& iface = g.reg.get<MeInterface>(nb);
                 const int nid = iface.networkId;
                 if (nid < 0 || nid >= static_cast<int>(MeSystem::networks().size()))
@@ -410,7 +410,7 @@ void PipeSystem::updateMachinePulls(Game& g) {
         }
     }
 
-    // ---- 发电机：从相邻管道/ME接口拉煤 ----
+    // ---- 发电机：从相邻管道/通物接口拉煤 ----
     auto gview = g.reg.view<Building, PowerGeneratorNode, Inventory>();
     for (auto [e, b, gen, inv] : gview.each()) {
         if (inv.isFull()) continue;
