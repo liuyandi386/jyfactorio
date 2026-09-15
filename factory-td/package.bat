@@ -134,6 +134,18 @@ for %%d in (libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll) do (
 rem ---------- 8. 游戏资源（config.json / 贴图 / 字体） ----------
 xcopy /e /i /y "%BUILD_DIR%\assets" "%STAGE%\assets" >nul
 
+rem ---------- 8a. Strip non-redistributable system fonts ----------
+rem   simsun.ttc is Windows' built-in SimSun (ZhongYi), NOT licensed for
+rem   redistribution; the .gitignore already keeps it out of the repo, but
+rem   xcopy above would still pull it from build\assets into the public zip.
+rem   Removing it is safe: AssetManager falls back to C:\Windows\Fonts\simsun.ttc
+rem   and EntrySystem never uses the bundled copy, so Chinese text still renders.
+rem   (rd on a non-empty dir fails silently, so an open-source font placed in
+rem    assets\fonts\ by a future change would survive -- only known-licensed
+rem    font files are deleted here.)
+for %%f in (simsun.ttc simsun.ttf msyh.ttc msyh.ttf simhei.ttf) do del /q "%STAGE%\assets\fonts\%%f" >nul 2>nul
+rd "%STAGE%\assets\fonts" >nul 2>nul
+
 rem ---------- 9. 文档：根目录全部 .md + LICENSE ----------
 copy /y "..\*.md" "%STAGE%\docs\" >nul
 if exist "..\README.md" copy /y "..\README.md" "%STAGE%\README.md" >nul

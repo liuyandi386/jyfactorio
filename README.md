@@ -99,7 +99,7 @@ package.bat    :: 2. 自动打包 → dist\factory-td-v1.3.4-win64.zip
 | 主程序 | `build/factory-td.exe` | 缺失则报错并提示先编译 |
 | SFML 运行库 | `build/sfml-*-2.dll`、`openal32.dll` | 只取 Release 版，**自动跳过 `*-d-*.dll` 调试库** |
 | MinGW 运行时 | 编译器 `mingw64\bin` | `libstdc++-6.dll` / `libgcc_s_seh-1.dll` / `libwinpthread-1.dll`，**漏拷就会在别人机器上报"找不到 libstdc++-6.dll"** |
-| 游戏资源 | `build/assets/` | `config.json` + 全部贴图 + 中文字体 |
+| 游戏资源 | `build/assets/` | `config.json` + 全部贴图（**版权字体在下一步被剔除**，见下方「字体授权」） |
 | 文档 | 仓库根目录 | **根目录所有 `.md`**（`README`/`update`/`PORTING`/`TODO`/`ai`）→ 包内 `docs/`，`README.md` 另放一份到包根 |
 | 其它 | 仓库根目录 | `LICENSE`（存在时）、自动生成的 `运行说明.txt` |
 
@@ -146,7 +146,11 @@ https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.4/factory-td-v1
 
 > **地址规则**：`releases/download/<tag>/<附件文件名>`，tag 名与文件名必须完全一致，否则 404。`releases/latest/download/<文件名>` 始终指向最新版，但文件名带版本号，升版后会失效。
 
-> ⚠️ **字体授权提醒**：`assets/fonts/simsun.ttc` 是 Windows 自带的**中易宋体，不可再分发**。`.gitignore` 已把 `*.ttc` 挡在仓库外，但打包会从工作区把它拷进 zip。若要公开发布，建议换成开源中文字体（Noto Sans SC / 思源黑体）；不打包字体时程序会自动回退到系统字体（`C:\Windows\Fonts\simsun.ttc`），中文 Windows 上仍能正常显示。
+> **字体授权（已处理）**：`assets/fonts/simsun.ttc` 是 Windows 自带的**中易宋体，不可再分发**。`.gitignore` 只把 `*.ttc` 挡在**仓库**外，`xcopy` 仍会把它从 `build/assets` 拷进 zip —— 所以 `package.bat` 第 **8a** 步会主动删除包内的版权字体（`simsun.ttc` / `simsun.ttf` / `msyh.ttc` / `msyh.ttf` / `simhei.ttf`）。
+>
+> 删除是安全的：`AssetManager::loadFont()` 的加载链是「包内字体 → `C:\Windows\Fonts\simsun.ttc` → 内置字体」，而启动菜单的 `EntrySystem::loadFont()` **本来就不用**包内 `simsun.ttc`，一直走系统字体 —— 中文 Windows 上显示完全正常。
+>
+> 若将来想内置字体，请改用**开源中文字体**（Noto Sans SC / 思源黑体）放进 `assets/fonts/`：第 8a 步是按**已知版权文件名逐个删除**的，不会误删其它字体文件（目录非空时 `rd` 也会静默失败，保留该目录）。
 
 ## 启动流程与设置
 
