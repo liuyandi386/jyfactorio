@@ -1,9 +1,12 @@
 // =====================================================================
 // SaveSystem.cpp —— 存档系统实现（JSON 格式，同 Python 版 save_system.py）
+// 手动保存 + 10 个独立槽位：saves/slot_01.json ... saves/slot_10.json
 // 使用 nlohmann/json：保存/加载全部游戏数据（建筑/物品/敌人/电网/配方）。
 // =====================================================================
 #include "SaveSystem.h"
 #include <algorithm>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -14,11 +17,39 @@
 using nlohmann::json;
 
 namespace {
-/// 存档路径（保存前自动创建目录，Python save_system 同款行为）
-std::string savePath() {
+/// 存档目录（写盘前自动创建，Python save_system 同款行为）
+std::string savesDir() {
     std::error_code ec;
     std::filesystem::create_directories("saves", ec);
-    return "saves/factory_td.json";
+    return "saves";
+}
+
+/// 确保路径的父目录存在（自检等按绝对路径写盘时用）
+void ensureParentDir(const std::string& path) {
+    std::error_code ec;
+    const std::filesystem::path p(path);
+    if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+}
+
+/// 文件字节数（失败返回 0）
+long long fileSize(const std::string& path) {
+    std::error_code ec;
+    const auto n = std::filesystem::file_size(path, ec);
+    return ec ? 0LL : static_cast<long long>(n);
+}
+
+/// 本地时间戳 "2026-09-15 14:30"（写进存档，供槽位菜单展示）
+std::string nowStamp() {
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_MSC_VER)
+    localtime_s(&tm, &t);
+#else
+    if (const std::tm* p = std::localtime(&t)) tm = *p;
+#endif
+    char buf[32];
+    if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm) == 0) return {};
+    return buf;
 }
 
 /// 物品计数表 → JSON 对象（键为物品键名）
@@ -27,23 +58,131 @@ json itemsToJson(const std::unordered_map<cfg::ItemType, int>& items) {
     for (const auto& [t, n] : items) j[ItemSystem::key(t)] = n;
     return j;
 }
+
+/// 旧版单文件存档（供迁移与自检使用）
+const char* kLegacyPath = "saves/factory_td.json";
 } // namespace
 
-bool hasSave() {
-    std::ifstream f(savePath());
-    return f.good();
+// =====================================================================
+// 槽位查询
+// =====================================================================
+std::string slotPath(int slot) {
+    if (slot < 0 || slot >= SAVE_SLOT_COUNT) return {};
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "saves/slot_%02d.json", slot + 1);
+    return buf;
+}
+
+SaveSlotInfo querySlot(int slot) {
+    SaveSlotInfo info;
+    info.path = slotPath(slot);
+    if (info.path.empty()) return info;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(info.path, ec)) return info;   // 空槽位
+
+    info.used = true;
+    info.bytes = fileSize(info.path);
+
+    // 只解析元数据字段（文件很小，整读即可）；损坏时标记出来供界面提示
+    std::ifstream f(info.path);
+    json j;
+    try {
+        f >> j;
+    } catch (...) {
+        info.corrupt = true;
+        info.summary = "存档损坏，无法读取";
+        return info;
+    }
+
+    info.savedAt = j.value("saved_at", std::string());
+    if (info.savedAt.empty()) info.savedAt = "旧版存档";
+
+    const int gold = j.value("gold", 0);
+    const int wave = j.value("wave", 1);
+    const size_t buildings = j.value("buildings", json::array()).size();
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "金币 %d · 第 %d 波 · 建筑 %zu",
+                  gold, wave, buildings);
+    info.summary = buf;
+    return info;
+}
+
+bool anySlotUsed() {
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i)
+        if (querySlot(i).used) return true;
+    return false;
+}
+
+int newestSlot() {
+    int best = -1;
+    std::filesystem::file_time_type bestTime{};
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        const std::string p = slotPath(i);
+        std::error_code ec;
+        if (!std::filesystem::exists(p, ec)) continue;
+        const auto t = std::filesystem::last_write_time(p, ec);
+        if (ec) continue;
+        if (best < 0 || t > bestTime) {
+            best = i;
+            bestTime = t;
+        }
+    }
+    return best;
+}
+
+// =====================================================================
+// 槽位读写与删除
+// =====================================================================
+bool saveGameToSlot(Game& g, int slot) {
+    const std::string p = slotPath(slot);
+    if (p.empty()) return false;
+    savesDir();
+    return saveGameToFile(g, p);
+}
+
+bool loadGameFromSlot(Game& g, int slot) {
+    const std::string p = slotPath(slot);
+    if (p.empty()) return false;
+    return loadGameFromFile(g, p);
+}
+
+bool deleteSlot(int slot) {
+    const std::string p = slotPath(slot);
+    if (p.empty()) return false;
+    std::error_code ec;
+    if (!std::filesystem::exists(p, ec)) return false;
+    return std::filesystem::remove(p, ec);
+}
+
+void migrateLegacySave() {
+    std::error_code ec;
+    savesDir();
+    if (!std::filesystem::exists(kLegacyPath, ec)) return;      // 没有旧档
+    const std::string target = slotPath(0);
+    if (std::filesystem::exists(target, ec)) return;            // 1 号槽已占用 → 不动
+    std::filesystem::rename(kLegacyPath, target, ec);
+    if (!ec) return;
+    // 跨设备等重命名失败时退回复制 + 删除
+    std::error_code ec2;
+    std::filesystem::copy_file(kLegacyPath, target,
+                               std::filesystem::copy_options::overwrite_existing, ec2);
+    if (!ec2) std::filesystem::remove(kLegacyPath, ec2);
 }
 
 // ---------------------------------------------------------------------
-// 保存
+// 保存（按文件写盘；槽位封装见 saveGameToSlot）
 // ---------------------------------------------------------------------
-bool saveGame(Game& g) {
+bool saveGameToFile(Game& g, const std::string& path) {
+    if (path.empty()) return false;
     try {
+        ensureParentDir(path);
         // 保存前刷新通物网络拓扑，确保 me_networks 是最新状态
         // （刚放置通物设备后立即存档时，网络可能还挂着脏标记未重建）
         MeSystem::rebuildNetworks(g);
         json j;
-        j["v"] = 1;
+        j["v"] = 2;                  // v2：新增 saved_at 槽位元数据
+        j["saved_at"] = nowStamp();  // 手动保存时间（槽位列表展示用）
         j["gold"] = g.gold;
         j["lives"] = g.lives;
         j["wave"] = g.currentWave;
@@ -205,7 +344,8 @@ bool saveGame(Game& g) {
                                     {"hp", en.health}, {"pi", en.pathIndex},
                                     {"tx", en.target.x}, {"ty", en.target.y}});
 
-        std::ofstream out(savePath());
+        std::ofstream out(path);
+        if (!out) return false;
         out << j.dump(2);
         return out.good();
     } catch (...) {
@@ -216,8 +356,9 @@ bool saveGame(Game& g) {
 // ---------------------------------------------------------------------
 // 加载（顺序：清空 → 矿点 → 建筑 → 传送带 → 敌人 → 状态）
 // ---------------------------------------------------------------------
-bool loadGame(Game& g) {
-    std::ifstream f(savePath());
+bool loadGameFromFile(Game& g, const std::string& path) {
+    if (path.empty()) return false;
+    std::ifstream f(path);
     if (!f) return false;
     // 先解析再清空：存档损坏时直接返回，不破坏当前游戏状态
     json j;
@@ -452,10 +593,10 @@ bool loadGame(Game& g) {
         g.power.dirty = true;   // 重建电网拓扑
         return true;
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "[loadGame] 异常: %s\n", e.what());
+        std::fprintf(stderr, "[loadGameFromFile] 异常: %s\n", e.what());
         return false;
     } catch (...) {
-        std::fprintf(stderr, "[loadGame] 未知异常\n");
+        std::fprintf(stderr, "[loadGameFromFile] 未知异常\n");
         return false;
     }
 }

@@ -4,10 +4,11 @@
 //
 // 负责玩家在真正进入游戏之前看到的全部内容：
 //   1) 启动动画（工作室 logo 淡入淡出，可跳过）
-//   2) 标题界面 / 主菜单（新手教程·普通关卡·继续游戏·设置·关于·退出）
-//   3) 设置界面（显示模式 / 交互选项，即时生效并持久化）
-//   4) 加载界面（真实执行配置读取·存档校验·路径预生成，带进度条）
-// 结束后把玩家的选择（EntryAction）交回 main.cpp，由其创建 Game。
+//   2) 标题界面 / 主菜单（新手教程·普通关卡·载入存档·设置·关于·退出）
+//   3) 存档槽位界面（WorldBox 式 10 个独立槽位：读取 / 删除，均带确认）
+//   4) 设置界面（显示模式 / 交互选项，即时生效并持久化）
+//   5) 加载界面（真实执行配置读取·存档校验·路径预生成，带进度条）
+// 结束后把玩家的选择（EntryAction + 槽位号）交回 main.cpp，由其创建 Game。
 //
 // 说明：入口系统自带独立窗口，进入游戏前销毁，因此 Game 可以按
 // 设置里的显示模式重新创建窗口，互不干扰。
@@ -17,6 +18,8 @@
 #include <string>
 #include <vector>
 #include <SFML/Graphics.hpp>
+
+#include "SaveSystem.h"   // SAVE_SLOT_COUNT / SaveSlotInfo / querySlot（存档槽位界面）
 
 /// 入口流程的最终结果
 /// 注意：Tutorial 与 NewGame 是两种完全独立的模式入口，互不为前置/子模式
@@ -35,10 +38,14 @@ public:
     /// 运行完整入口流程，直到玩家选择了"开始/继续/退出"
     EntryAction run();
 
+    /// 玩家在「载入存档」界面选中的槽位（0..9；未选择为 -1）
+    /// 仅在 run() 返回 EntryAction::Continue 时有意义
+    int chosenSlot() const { return chosenSlotIndex; }
+
 private:
     // ---------------- 内部状态机 ----------------
-    enum class State { Splash, Title, Settings, Loading, Finished };
-    enum class Dialog { None, ConfirmNewGame, ConfirmQuit, About };
+    enum class State { Splash, Title, Settings, Slots, Loading, Finished };
+    enum class Dialog { None, ConfirmQuit, ConfirmLoad, ConfirmDelete, About };
 
     /// 主菜单项
     struct MenuItem {
@@ -69,6 +76,7 @@ private:
     void drawSplash();
     void drawTitle();
     void drawSettings();
+    void drawSlots();
     void drawLoading();
     void drawDialog();
     void drawFadeOverlay();
@@ -91,6 +99,18 @@ private:
     void requestStart(EntryAction action);   // 开始新游戏/继续游戏（含确认框）
     void beginLoading(EntryAction action);   // 进入加载界面（执行真实加载工作）
     void advanceLoading(float dt);
+
+    // ---------------- 存档槽位（载入存档） ----------------
+    void openSlots();                        // 打开 10 槽位界面
+    void closeSlots();                       // 返回主菜单
+    void refreshSlots();                     // 重新扫描槽位状态与底部摘要
+    void handleSlotsKey(const sf::Event::KeyEvent& key);
+    void handleSlotsClick(float x, float y);
+    void activateFocusedSlot();              // 读取该槽位（先确认）
+    void deleteFocusedSlot();                // 删除该槽位（先确认）
+    /// 槽位格子矩形（2 列 × 5 行）/ 底部按钮矩形（读取 · 删除 · 返回）
+    std::array<sf::FloatRect, SAVE_SLOT_COUNT> slotTileRects() const;
+    std::array<sf::FloatRect, 3> slotButtonRects() const;
 
     // ---- 对话框 ----
     int dialogOptionCount() const;
@@ -127,6 +147,14 @@ private:
     int settingRow = 0;
     int settingHover = -1;
     bool pendingDisplayApply = false;   // 显示模式变更延后到事件循环之外生效
+
+    // ---- 存档槽位（载入存档） ----
+    int slotFocus = 0;                  // 键盘焦点槽位
+    int slotHover = -1;                 // 鼠标悬停槽位
+    std::array<SaveSlotInfo, SAVE_SLOT_COUNT> slotInfos{};   // 槽位状态快照
+    int chosenSlotIndex = -1;           // 决定载入的槽位（Continue 时交给 main.cpp）
+    std::string slotNotice;             // 界面内提示（如"该槽位是空的"）
+    float slotNoticeTimer = 0.0f;
 
     // ---- 加载 ----
     std::vector<std::string> loadSteps;

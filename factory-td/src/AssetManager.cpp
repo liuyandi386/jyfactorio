@@ -739,7 +739,7 @@ void AssetManager::generateStaticTextures() {
         textures_[machineKey("assembler", d, true)] = rt.getTexture();
     }
 
-    // ---- 旧版发电机（2×2 大功率，4方向，覆盖旧 PNG） ----
+    // ---- 旧版发电机（大功率，4方向，覆盖旧 PNG） ----
     for (int d = 0; d < 4; ++d) {
         const int texDir = d;   // 箭头朝向 == 逻辑方向 == 贴图键后缀
         sf::RenderTexture rt; rt.create(S, S); rt.clear(sf::Color::Transparent);

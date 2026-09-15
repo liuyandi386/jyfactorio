@@ -1,17 +1,115 @@
 # AI 交接文档（游戏全部知识）
 
-> 写于 2026-08-25，最近更新 2026-09-14（**Alpha v1.3.3 已发布**，见 §0）。本文档是"换一个 AI 继续开发"的完整交接材料：
+> 写于 2026-08-25，最近更新 2026-09-15（**Alpha v1.3.4 已发布**，见 §0）。本文档是"换一个 AI 继续开发"的完整交接材料：
 > 项目是什么、做到哪了、怎么做的、坑在哪、还有什么没做。
 > 阅读顺序建议：**0 最近一轮交接** → 1 项目现状 → 3 构建 → 4 架构 → 5 机制 → 8 配置 → 9 存档 → 11 坑 → 12 未完成。
 
 ---
 
-## 0. ★ 最近一轮工作交接（2026-09-14，Alpha v1.3.3 已发布）
+## 0. ★ 最近一轮工作交接（2026-09-15，Alpha v1.3.4 已发布）
 
 > 本节回答两个问题：**我干了啥 / 接下来要干啥**。先看结论：
-> **v1.3.3 是一次"品牌 + 教学 + 适配"的大版本，共 6 块：①品牌重塑《异星工厂塔防》→《织星计划 Project Weavestar》（含织女星 AI 人设）；②新增独立的新手教程模式（`systems/TutorialSystem.*`）与叙事播报层（`systems/Narrative.*`）；③设置新增「帧率 / 垂直同步」；④采矿场双模式（原有模式 / 固定矿点模式，右键面板切换）；⑤修复 5 个 bug——机器贴图整体偏左 90°、高刷新率下摄像机与移动速度翻倍、高 DPI 下无边框全屏只占一角、旋转输出面后箭头与输出面错位、固定 60 帧后画面异常；⑥术语去模组化「ME → 通物」。编译通过（`[100%] Built target factory-td`）、`--selftest-save` 21/21、启动冒烟存活；文档已同步（`update.md` 写入 v1.3.3、`README.md` 与本文 §0 已更新）。唯一遗留仍是「人工实机视觉走查」（教程流程、通讯条观感、采矿场设置面板、高刷/高 DPI 表现），需用户睁眼确认。**
+> **v1.3.4 是一次"存档机制重构"版本：把自动保存彻底改为「手动保存 · 10 槽位」（参考《世界盒子》WorldBox）。核心改动：①`SaveSystem` 重写为 10 个独立槽位文件（`saves/slot_01.json`…`slot_10.json`），提供 `querySlot/anySlotUsed/newestSlot/saveGameToSlot/loadGameFromSlot/deleteSlot/migrateLegacySave` 与文件级 `saveGameToFile/loadGameFromFile`；②**移除所有自动保存路径**——新建世界/退出/返回主界面都不再写盘，只有玩家点「保存存档」或按 F5 才落盘，杜绝"新开一局关窗覆盖旧档"；③启动菜单「继续游戏」→「载入存档」、暂停面板 4 项→**5 项**（继续/保存/载入/设置/返回），两处都打开同一套 2×5 槽位管理页（显示空槽/存档时间/摘要，覆盖与删除前二次确认且默认焦点在「取消」）；④旧单档 `saves/factory_td.json` 首次启动**自动迁移到槽位 1**；⑤`F5`/`F9` 语义改为"打开槽位页"，不再直接读写盘；⑥`--selftest-save` 改用独立临时文件，不再触碰玩家槽位；⑦**建筑占地尺寸收敛为唯一数据源**——`cfg::BUILDING_INFOS` 增加 `w/h` + `cfg::buildingSize()`，审计确认全项目 22 种建筑此前仅旧版大功率发电机(索引10)曾误设为 2×2（**经确认该 2×2 为错误设定、现已统一改为 1×1，全项目无多格建筑**），并修正 4 处"按 1×1 处理"的占地逻辑（放置预览 / 面编辑器 / 物流邻接 / 状态灯）。⑧**中文输入法闪屏修复（v1.3.4 补丁 · 版本号不变）**——无边框全屏下"切回中文输入法"后持续闪屏/黑屏 + 鼠标漂移；根因是窗口未禁用输入法、候选窗/语言栏与"铺满 + 置顶"的全屏窗口互抢 Z 序与前台焦点；修法见 §0.1-H。编译通过（`[100%] Built target factory-td`）、自检 **25/25**、启动冒烟存活；文档已同步（`update.md` 写入 v1.3.4、`README.md` 与本文 §0/§4.1/§7 已更新）。唯一遗留仍是「人工实机视觉走查」（槽位卡片排版、覆盖/删除确认交互、发电机（现 1×1）的预览与面编辑器、**中文输入法下全屏闪屏是否消失**）。**
 
-### 0.1 干了啥（v1.3.3，本轮）
+### 0.1 干了啥（v1.3.4，本轮）
+
+**A. `SaveSystem` 重写为 10 槽位手动存档（`src/SaveSystem.h/.cpp`）**
+- 命名常量：`SAVE_SLOT_COUNT = 10`；槽位文件 `saves/slot_01.json … slot_10.json`（`slotPath(i)` 两位补零）。
+- 数据结构：`SaveSlotInfo{ path, used, corrupt, bytes, savedAt, summary }`；`summary` 形如 `"金币 %d · 第 %d 波 · 建筑 %zu"`。
+- 查询接口：`querySlot(i)`（文件不存在→空槽；JSON 解析失败→`corrupt=true`）、`anySlotUsed()`、`newestSlot()`（按 `saved_at` 取最近槽）。
+- 读写删：`saveGameToSlot(Game&,i)` / `loadGameFromSlot(Game&,i)` / `deleteSlot(i)`；底层文件级 `saveGameToFile(Game&,path)` / `loadGameFromFile(Game&,path)`（自检与迁移复用）。
+- 写入时 `j["v"]=2; j["saved_at"]=nowStamp();`（本地时间 `%Y-%m-%d %H:%M`）；**旧 v1 存档仍可正常读取**（缺 `saved_at` 只影响显示）。
+- `migrateLegacySave()`：把旧单档 `saves/factory_td.json` 迁移为 `saves/slot_01.json`（重命名失败则复制+删除）；**槽位 1 已占用则原样不动**，幂等安全。
+
+**B. `Game` 存档接口（`Game.h/.cpp`）**
+- `void saveGame()/loadGame()` → **`bool saveToSlot(int slot)` / `bool loadFromSlot(int slot)`**。
+- `saveToSlot`：教程模式拒绝并 Toast「新手教程模式不保存进度」；成功 Toast「已保存到槽位 N 号」。
+- `loadFromSlot`：成功后 `tutorial = tutorial::State{}`（普通关卡不承载引导状态）；失败 Toast「该槽位没有存档或存档已损坏」。
+- **注释里明确"本作没有任何自动保存路径"**，改代码时勿再引入自动写盘。
+
+**C. 游戏内暂停面板（`ui/GameUI.*`）**
+- 主菜单 4 项 → **5 项**（继续游戏 / **保存存档** / **载入存档** / 设置 / 返回主界面），`pauseRects_` 改 `array<...,5>`。
+- 新增 `enum class SlotPanelMode{Save,Load}`、`openSlotPanel()`（F5/F9 也可直接唤出并暂停世界）、`refreshSlotInfos()`、`handleSlotKey/Click`、`activateFocusedSlot()`、`deleteFocusedSlot()`、`runSlotConfirm()`。
+- 几何：`slotTileRects()`（2×5）、`slotButtonRects()`（主操作/删除/返回）、`slotConfirmPanelRect()`、`slotConfirmRects()`；`enum class SlotConfirm{None,Overwrite,Delete,Load,ReturnMenu}`。
+- **覆盖/删除前弹二次确认，默认焦点在「取消」**（`slotConfirmFocus_ = 1`）。
+- 「返回主界面」改为仅弹确认（`slotConfirm_ = ReturnMenu`），**不再自动保存**。
+
+**D. 启动菜单（`ui/EntrySystem.*`）**
+- 主菜单「继续游戏」→「**载入存档**」（快捷键 `L` / `C`）；新增 `State::Slots` 子页与 `chosenSlot()`。
+- `Dialog` 改为 `{None, ConfirmQuit, ConfirmLoad, ConfirmDelete, About}`；删除 `ConfirmNewGame`（手动存档下新开局不写盘，无需确认）。
+- 新增 `openSlots/closeSlots/refreshSlots/handleSlotsKey/handleSlotsClick/activateFocusedSlot/deleteFocusedSlot/slotTileRects/slotButtonRects/drawSlots` 与 `slotFocus/slotHover/slotInfos/chosenSlotIndex/slotNotice/slotNoticeTimer`。
+- 构造函数先 `migrateLegacySave()` 再 `refreshSlots()` 填摘要。
+- 加载界面的「校验本地存档数据」一步改为 `refreshSlots()`（只扫描槽位、不写盘）。
+
+**E. 快捷键 / 自检**
+- `PlayerSystem`：`F5` → `ui->openSlotPanel(Save)`，`F9` → `ui->openSlotPanel(Load)`（不再直接读写盘）。
+- `main.cpp`：`EntrySystem` 销毁前取出 `chosenSlot()`，`continue` 时 `game.loadFromSlot(slot)`；`--selftest-save` 改用 `saves/_selftest_slot.json` 独立临时文件，跑完即删，**不备份/不触碰玩家槽位**。
+
+**F. 版本号**：`EntrySystem.cpp` `kVersion` → `v1.3.4  ALPHA BUILD`；`GameConfig.h` `SCREEN_TITLE` → ` v1.3.4`。
+
+**G. 建筑占地统一为 1×1（全项目尺寸规格审计）**
+
+审计范围：`GameConfig.h`（注册定义 / 成本 / 快捷键）、`components/Building.h`（`w/h` 组件字段）、
+`AssetManager.cpp`（`machineKey` 贴图键）、`RenderSystem.cpp`（绘制 / 预览）、`GameUI.cpp`（面编辑器 /
+卡片图标）、`Game.cpp`（`canPlace` / `placeBuilding` / `registerToGrid`）、`PipeSystem.cpp`（邻接拉料）、
+`PowerSystem.cpp`（电网邻接）、`python版（老版）/entities/Generator.py`（原版参照）。
+> 说明：本项目是 2D 网格工厂游戏，**没有** Minecraft 式「模型文件 / 方块状态文件」，
+> 对应物是：注册定义 = `cfg::BUILDING_INFOS`；模型 = `AssetManager` 程序化生成的贴图 + `machineKey` 键；
+> 占位配置 = `Building::w/h`。
+
+- **结论**：22 种建筑**全部统一为 1×1**。此前旧版大功率燃煤发电机（`BuildingType::Generator`，
+  索引 10）被做成 **2×2**（移植自 Python 原版 `entities/Generator.py` 的
+  `super().__init__(x, y, TILE_SIZE*2, TILE_SIZE*2)`）——**经确认这是错误设定，已一并改为 1×1**；
+  至此项目中不存在任何多格建筑。
+- **改造**：
+  1. `cfg::BuildingInfo` 增 `uint8_t w = 1, h = 1;`；发电机那行**删除** `, 2, 2` 覆盖，回到默认 1×1。
+  2. 新增 `cfg::BuildingSize` + `inline cfg::buildingSize(BuildingType)` —— **尺寸唯一数据源**。
+  3. `Game::canPlace` 删掉内联 `t == Generator ? 2 : 1`，改 `cfg::buildingSize(t)` 逐格扫描。
+  4. `Game::placeBuilding` 删掉 Generator 分支里的 `b.w = 2; b.h = 2;`，改为在 switch 之前统一
+     `b.w = bs.w; b.h = bs.h;`。
+  5. `components/Building.h` 新增 `struct FaceTiles` + `inline FaceTiles faceNeighborTiles(const Building& b, int dir)`
+     —— 取某面**外侧**的所有相邻格，按 `b.w/b.h` 沿切向铺开（当前全 1×1→1 格）。
+  6. `RenderSystem.cpp` 放置预览：`sf::Vector2f fp{s*bs.w, s*bs.h}`（原先恒为 `{s,s}`）。
+  7. `GameUI.cpp` 面编辑器三处：`faceEditorRects` 方向按钮偏移改
+     `offX = size*(b.w+1)*0.5f`、中心高亮框改 `size*b.w × size*b.h`、
+     点击外部关闭范围改 `size*(b.w+2) × size*(b.h+2)`。
+  8. `PipeSystem.cpp` 机器拉料 + 发电机拉煤两个循环：外层仍按面 `d` 走，**内层新增 `fi` 遍历
+     `faceNeighborTiles(b, d)`**；发电机的"每帧至多补 1 煤"语义用 `bool got` 保住（原来靠 `break` 外层循环）。
+  9. `RenderSystem.cpp` 发电机状态灯移到整块占地中心。
+- **自检**：`main.cpp --selftest-save` 新增占地规格项 —— ①静态审计"全部建筑均为 1×1"；
+  ②自动找一块空地实地放置发电机，核对单格 `isOccupied` 且该格 `canPlace==false`；
+  ③读档后仍为 1×1。（建筑计数 13→14 种）→ **25/25 通过**。
+
+**H. 中文输入法全屏闪屏修复（v1.3.4 补丁 · 版本号不变，`Settings.cpp` + `Game.cpp` + `CMakeLists.txt`）**
+
+> 用户反馈：无边框全屏下，输入法**从英文切回中文**之后画面持续闪屏/黑屏，鼠标在世界里的坐标反复跳变
+> （放置预览/摄像机像"自己乱滑"）；**窗口化则正常**；**所有帧率档位都一样**；同款现象也出现在 **《我的世界》1.7.10**。
+
+- **为什么是输入法**（逐条现象对上）：
+  1. 窗口化不闪 → 窗口不再 topmost，候选窗在最上层正常显示，不存在 Z 序争夺。
+  2. **所有帧率档位都闪** → 与垂直同步/交换链饥饿无关（帧率不影响焦点争夺）。
+  3. **英→中切回才闪** → 切换键盘布局会销毁/重建 IME 窗口与 TSF 服务；切回中文时输入法重建候选窗/语言栏并抢"编辑焦点"。
+  4. 只在 MC 1.7.10 复现 → 1.7.10 同样是"老式 Win32 全屏窗口 + 不处理 IME"，是**同一类窗口路径**的共性问题。
+  5. 无事件 4101、无进程冲突 → 排除驱动 TDR 与第三方 overlay，锁定应用层窗口/焦点 × 输入法。
+- **根因**：全屏 = 「`sf::Style::None` 铺满 + `SetWindowPos(HWND_TOPMOST)` 置顶」，而游戏窗口**从未禁用输入法** → 置顶全屏窗口与输入法候选窗/语言栏**互抢 Z 序与前台焦点**，整窗反复重绘 → 持续闪屏，鼠标坐标随之跳变。
+- **修法**（`src/Settings.cpp`）：新增匿名命名空间的 `suppressImeForWindow(sf::RenderWindow&)`，
+  在 `gset::applyToWindow()` 的 `window.create()` **之后**调用（**窗口重建会产生新 HWND，必须重新关**）：
+  1. `ImmAssociateContext(hwnd, nullptr)` —— 解绑该窗口输入法上下文（**IMM32** 路径）；
+  2. `ImmDisableIME(0)` —— 禁用当前线程输入法；
+  3. `SetWindowLongPtrW(hwnd, GWLP_WNDPROC, &imeSuppressProc)` —— 窗口过程最外层**吞掉 `WM_IME_STARTCOMPOSITION/COMPOSITION/ENDCOMPOSITION/NOTIFY/CHAR/REQUEST`**，
+     并把 `WM_IME_SETCONTEXT` 的 `ISC_SHOWUICOMPOSITIONWINDOW` 位清掉后**继续下发**（整条丢弃会让输入法状态错乱）——这一条覆盖 **TSF 路径**（微软拼音在 Win10/11 走的就是 TSF，光靠 IMM32 不够）。
+  - **为什么敢直接禁**：全项目**没有任何文本输入**（无 `TextEntered`、无输入框），禁用输入法零副作用。
+  - `CMakeLists.txt`：`if(WIN32) target_link_libraries(factory-td PRIVATE imm32)`。
+- **连带修复**（`src/Game.cpp`）：`processEvents()` 收到 `sf::Event::LostFocus` 时 `keys.fill(false)` ——
+  输入法候选窗抢焦点会让 W/A/S/D 的"松开"事件丢失、按键卡在按下态，导致摄像机/放置预览持续漂移。
+- **验证**：编译通过（`[100%] Built target factory-td`）、`--selftest-save` **25/25 通过**（窗口创建路径真实执行过）。
+- **留给人工**：中文输入法下的实机复测；若仍有残余闪屏，下一步才是把 `HWND_TOPMOST` 降级为 `HWND_TOP`。
+
+### 0.1a 上一版（v1.3.3，已完成）：品牌重塑 + 新手教程 + 叙事层 + 采矿场双模式 + 适配修复
+
+> **v1.3.3 是一次"品牌 + 教学 + 适配"的大版本，共 6 块：①品牌重塑《异星工厂塔防》→《织星计划 Project Weavestar》（含织女星 AI 人设）；②新增独立的新手教程模式（`systems/TutorialSystem.*`）与叙事播报层（`systems/Narrative.*`）；③设置新增「帧率 / 垂直同步」；④采矿场双模式（原有模式 / 固定矿点模式，右键面板切换）；⑤修复 5 个 bug——机器贴图整体偏左 90°、高刷新率下摄像机与移动速度翻倍、高 DPI 下无边框全屏只占一角、旋转输出面后箭头与输出面错位、固定 60 帧后画面异常；⑥术语去模组化「ME → 通物」。编译通过（`[100%] Built target factory-td`）、`--selftest-save` 21/21、启动冒烟存活；文档已同步。**
+
+原 v1.3.3 交接小节（重命名为 0.1b 的历史沿革见下）：
 
 **A. 机器贴图方向错位（本版最"值钱"的修复）**
 - 症状：放置采矿场 / 组装机 / 发电机时，贴图里的箭头比实际输出方向**向左偏 90°**。
@@ -75,9 +173,10 @@
 
 ### 0.2 验证到什么程度
 
-- ✅ **编译**：`cmake --build` 得到 `[100%] Built target factory-td`（LTO 的 `ar.exe: plugin needed to handle lto object` 是已知噪音，见 §3.2）。
-- ✅ **存档自检**：`factory-td.exe --selftest-save`（在 `build/` 下运行）→ **21/21 通过**（见 §3.4）。本版新增的 `fixed_ore / ore_filter / has_bound / bound_x / bound_y` 字段**向后兼容**：旧存档无这些键 → `value(..., default)` 回落为"原有模式"，位置/朝向直接沿用存档值、**不做吸附重排**（避免读档后建筑乱跑）。
+- ✅ **编译**：`cmake --build` 得到 `[100%] Built target factory-td`（LTO 的 `ar.exe: plugin needed to handle lto object` 是已知噪音，见 §3.2）。**v1.3.4 同样编译通过。**
+- ✅ **存档自检**：`factory-td.exe --selftest-save`（在 `build/` 下运行）→ **25/25 通过**（见 §3.4）。**v1.3.4 起自检改用独立临时文件 `saves/_selftest_slot.json`，不再备份/触碰玩家槽位；并新增占地规格核对（全建筑均 1×1 / 发电机单格登记与阻挡 / 读档后占地完整）。** v1.3.3 新增的 `fixed_ore / ore_filter / has_bound / bound_x / bound_y` 字段**向后兼容**：旧存档无这些键 → `value(..., default)` 回落为"原有模式"，位置/朝向直接沿用存档值、**不做吸附重排**（避免读档后建筑乱跑）。
 - ✅ **启动冒烟**：在 `build/` 下后台运行 exe 未立即退出（正常）。
+- ✅ **窗口输入法禁用（v1.3.4 补丁）**：编译通过；`--selftest-save` **25/25** —— 该自检会**真实创建窗口**，因此 `suppressImeForWindow()` 的执行路径已被实跑过且未崩溃。**但"切回中文输入法后是否还闪屏"属于视觉现象，必须人眼实机确认（见 §0.4-1）。**
 - ⚠ **人工视觉走查仍未做（唯一遗留，见 0.4-1）**：本 AI 只做了编译/自检/冒烟，无法替代人眼确认：新手教程全流程、织女星通讯条观感、采矿场设置面板交互、高刷新率/高 DPI 下的实际手感。**特别是本版修的两个"方向/速度"bug，必须实机看才能确认。**
 
 ### 0.3 关键坑（已修，勿再犯）
@@ -88,16 +187,20 @@
 4. **v1.3.3 新坑：贴图方向映射不能"照抄 Python"**。Python 版老代码里用的是"逆时针 90°"键表，但**它对应的 PNG 命名规则与该表是配套的**；C++ 版边把 PNG 换成"顺时针生成、文件名即朝向"，却保留了那张逆时针表 → 全部机器贴图偏左 90°。**改动贴图键名/朝向映射前，先 `dir assets/sprites/machines` 确认文件名与箭头方向，再决定映射公式。**
 5. **v1.3.3 新坑：SFML 的 `setVerticalSyncEnabled` 与 `setFramerateLimit` 互相拆台**。同时设置会导致帧率/画面异常。任何帧率相关改动都要走 `gset::applyFrameMode()` 这一个入口（内部按固定顺序二选一），**不要在别处再直接调这两个 setter。**
 6. **v1.3.3 新坑：所有"速度"必须乘 `dt`，所有"平滑"必须用帧率无关形式**。摄像机原先是每帧固定步长，144Hz 下比 60Hz 快 2.4 倍。新写的移动/动画同理。
+7. **v1.3.4 补丁新坑：「无边框全屏 + `HWND_TOPMOST`」必须同时禁用窗口输入法**。否则中文输入法（微软拼音走 TSF）在被切回时会在游戏窗口上重建候选窗/语言栏并抢"编辑焦点"，与置顶全屏窗口**互抢 Z 序与前台焦点** → 持续闪屏/黑屏 + 鼠标坐标跳变（表现为"只有切回中文才闪、窗口化不闪、任何帧率都闪"；《我的世界》1.7.10 同款）。**只要本作保持"置顶全屏"窗口策略，`gset::applyToWindow()` 里那次 `suppressImeForWindow()` 就不能删；且它是跟着 `window.create()` 走的（每次重建窗口都要重新关一次）。** 另外：全项目保持"无任何文本输入"，禁输入法才安全；**若将来真要加输入框，必须先把这里的禁用逻辑按控件粒度放开。**
 
 ### 0.4 接下来要干啥（建议顺序）
 
 1. **人工实机走查（唯一遗留，需用户）**：
+   - **存档槽位（v1.3.4 新增，重点）**：主菜单「载入存档」与暂停面板「保存/载入存档」打开槽位页，确认 **10 张卡片排版正常**；分别在空槽保存、对已占用槽位覆盖（应弹确认、默认「取消」）、删除（应弹确认）、读取恢复；确认**存档时间/摘要**显示正确；确认旧 `saves/factory_td.json` **已迁移到槽位 1** 且内容完好；确认**新开一局后直接关窗，旧存档槽位不被改动**。
+   - **建筑占地统一 1×1（v1.3.4 新增）**：按 `8` 选发电机，确认**放置预览为 1 格绿/红框**；放置后右键面编辑器，**中心高亮框盖满该格、四个方向按钮在该格之外**；在发电机四面接上管道喂煤，确认**四面都能进煤**；拆掉重建确认该格释放、退费一次。
    - **贴图朝向**：放置采矿场，用 `R`/放置方向键切 4 个方向，确认**贴图箭头方向 == 输出面 == 实际物流口**；组装机、发电机同样确认。
    - **采矿场双模式**：右键矿机 → 面板出现；切「固定矿点模式」确认**吸附到矿点旁**且只采所选矿种；切回「原有模式」确认行为与旧版一致；存档再读档确认位置/朝向/模式/绑定原样恢复；确认两种模式产率一致。
    - **新手教程**：主菜单「新手教程」→ 引导横幅/步骤/跳过按钮正常，`F2` 跳过与重开；教程内 `F5`/`F9` 有"不保存/不读取"提示；退出教程后普通关卡存档未被污染（`saves/factory_td.json` 与 `saves/tutorial.json` 互不影响）。
    - **叙事**：着陆/首建/首次遇敌等播报出现，通讯条不被 Toast 挤掉；教程模式下**不叠加**播报。
    - **帧率设置**：设置界面第 4 项逐个切换（垂直同步/60/120/144/不限制），确认**立即生效且画面不抖**；高刷屏重点看"不限制"与"垂直同步"的手感差异。
    - **高 DPI**：本机 150% 缩放，确认无边框全屏铺满且不"只占一角"；黑屏时用 `--safe-mode` 救场。
+   - **中文输入法全屏闪屏（v1.3.4 补丁新增，重点）**：无边框全屏下，把输入法在**英文 ↔ 中文之间来回切换多次**（尤其是"切回中文"这一下），确认**画面不再闪烁/黑屏、鼠标不再漂移、W/A/S/D 不再卡键**；窗口化模式再复测一遍对照。**这一步只能人眼确认，编译与自检覆盖不到。**
    - 顺带复测 v1.3.2/v1.3.1 遗留：暂停面板与返回主界面、主菜单设置界面焦点不被夺走。
 2. **可选（先问用户）**：新手教程的文案/步骤数与章节划分是否合适？是否需要"教程内可跳过到任意章节"？
 3. ~~文档同步~~ → **已完成**（`update.md` v1.3.3、`README.md`、本文 §0）。
@@ -114,9 +217,9 @@
   - `add.txt` —— **用户需求原文（最高优先级需求来源）**
   - `TODO.md` —— 早期遗留 TODO
   - `factory-td\PORTING.md` —— Python→C++ 移植对照表
-- **当前状态**：add.txt 的 ①~⑬ 项需求**全部实现**，编译通过、运行正常；存档系统经过全面修复并有自检验证（21/21 通过）。
-- **当前版本**：**Alpha v1.3.3**（2026-09-14）——**品牌重塑《织星计划》+ 新手教程模式 + 叙事播报 + 采矿场双模式 + 贴图/高刷/高DPI 修复**；上一版 v1.3.2 为**游戏内暂停面板 + 设置项共用化**。
-- **v1.3.3 状态**：新增**新手教程独立模式**（`systems/TutorialSystem.*`）、**叙事播报层**（`systems/Narrative.*`）、**采矿场双模式**（`Machine` + `MinerSystem` + `ui/GameUI` 设置面板）、**帧率/垂直同步设置**（`gset::applyFrameMode()`）；修复**机器贴图偏左 90°**（`AssetManager::machineKey`）、**高刷新率速度翻倍**（`Camera` 改 dt）、**高 DPI 无边框全屏只占一角**、**旋转输出面后箭头与输出面错位**（`MinerSystem::rotateOutputFace()`）；术语 **ME → 通物**。**代码完成、编译通过、存档自检 21/21、启动冒烟通过；文档已同步；唯一遗留是人工实机视觉走查（详见 §0）。**
+- **当前状态**：add.txt 的 ①~⑬ 项需求**全部实现**，编译通过、运行正常；存档系统经过全面修复、建筑占地规格已统一收敛，并有自检验证（25/25 通过）。
+- **当前版本**：**Alpha v1.3.4**（2026-09-15）——**存档机制重做为「手动保存 · 10 槽位」**（参考 WorldBox；移除所有自动保存路径、旧单档自动迁移到槽位 1）；上一版 v1.3.3 为品牌重塑《织星计划》+ 新手教程模式 + 叙事播报 + 采矿场双模式 + 贴图/高刷/高DPI 修复。
+- **v1.3.4 状态**：`SaveSystem` 重写为 10 槽位手动存档（`saves/slot_01..10.json`，`querySlot/anySlotUsed/newestSlot/saveGameToSlot/loadGameFromSlot/deleteSlot/migrateLegacySave`）；`Game::saveGame/loadGame` → `saveToSlot/loadFromSlot`；启动菜单「载入存档」+ 暂停面板 5 项共用 2×5 槽位页（覆盖/删除二次确认、默认焦点「取消」）；`F5`/`F9` 改为打开槽位页；`--selftest-save` 改用独立临时文件；**建筑占地尺寸统一收敛到 `cfg::buildingSize()`**（全项目所有建筑统一 1×1，已废止旧版发电机的 2×2；修复预览/面编辑器/物流邻接 4 处占地逻辑）。**代码完成、编译通过、存档自检 25/25、启动冒烟通过；另含一个 v1.3.4 补丁（**版本号不变**）——修复「中文输入法切回中文后无边框全屏闪屏/黑屏 + 鼠标漂移」（窗口主动禁用输入法，见 §0.1-H）；文档已同步；唯一遗留是人工实机视觉走查（详见 §0）。**
 - ⚠ **文档同步坑（已修复，勿重犯）**：曾出现根目录 `update.md` / `ai.md` 停在 v1.2.1，而开发记录只写进了 `build/update.md` 副本，落后两个版本。**改代码后同步更新根目录 `README.md` / `update.md` / `ai.md`；`build/` 是构建产物目录，不是文档源。**
 - **开发方式**：每改一批代码必须 `cmake --build` 编译验证 + 启动冒烟测试；用户会实际游玩并截图报 bug，报 bug 时先"解析为什么"再修。
 
@@ -149,7 +252,7 @@ factory-td/
     ├── Camera.h/.cpp     # 摄像机（WASD/滚轮缩放0.5~2.0/帧率无关指数平滑CAMERA_SPEED_PER_SEC/坐标变换）
     ├── AssetManager.h/.cpp # 贴图+字体加载缓存；程序化生成（地形/熔炉/合金炉/电容/发电机/矿机L2L3虚空/5新矿石）
     ├── ConfigLoader.h/.cpp # config.json 加载器（"存在才覆盖"，缺字段用内置默认值）
-    ├── SaveSystem.h/.cpp # JSON 存档（saves/factory_td.json）
+    ├── SaveSystem.h/.cpp # JSON 存档：10 槽位手动保存（saves/slot_01..10.json；旧单档自动迁移到槽位 1）
     ├── ui/GameUI.h/.cpp  # 暗色工业风HUD：资源栏/建筑按钮/方向悬浮窗/面编辑器/配方菜单/
     │                     #   说明书(H/F1、6标签页)/商店(B)/随身工作台(V)/通物终端面板/
     │                     #   小地图/世界地图(M)/Toast/悬停提示/暂停面板(ESC：继续·存档·设置·返回主界面)/
@@ -216,8 +319,8 @@ $env:Path = "C:\Program Files\RedPanda-Cpp\mingw64\bin;" + $env:Path
 ```
 build\factory-td.exe --selftest-save
 ```
-- 自动布置 13 种建筑+各类状态 → saveGame → 清空世界 → loadGame → 21 项核对（库存/任务/管道缓冲/面配置/塔/分流器/发电机/ME网络/矿点/金币/生命/摄像机/敌人）。
-- 自动备份/恢复玩家真实存档（`factory_td.json.selftest_bak`）。
+- 自动布置 14 种建筑（含旧版大功率发电机）+各类状态 → saveGame → 清空世界 → loadGame → 25 项核对（占地规格/库存/任务/管道缓冲/面配置/塔/分流器/发电机/ME网络/矿点/金币/生命/摄像机/敌人）。
+- **v1.3.4 起**：往返测试使用独立临时文件 `saves/_selftest_slot.json`，跑完即删，**不备份、不触碰玩家的任何槽位存档**（旧版会备份/恢复 `factory_td.json`，已废弃）。
 - 退出码 0=全部通过。
 
 ### 3.5 依赖
@@ -231,7 +334,8 @@ build\factory-td.exe --selftest-save
 
 ### 4.1 核心数据
 - `Game`（Game.h）：一切公开。`entt::registry reg`、`Grid grid`（200×200，`GridCell{building}`）、`terrain[]`（0草地/1路径）、`enemyWaypoints`、`camera`、`assets`、`ui`、`power`（PowerState）、`gold/lives/playerInv`、`hasSelection/selected`、`hasFreePlace/freePlaceType`（商店兑换机器的免费放置）、`faceEditTarget`、波次状态、`keys[4]`。
-- **网格占用**：`grid.at(x,y).building` = 该格建筑实体（2×2 发电机在 4 格都登记）。**矿点不是建筑**：矿点是 `GridPos + OreDeposit` 实体，不占网格、不阻塞放置。
+- **网格占用**：`grid.at(x,y).building` = 该格建筑实体（多格建筑在其所有格子登记；当前建筑全部 1×1）。**矿点不是建筑**：矿点是 `GridPos + OreDeposit` 实体，不占网格、不阻塞放置。
+- **占地尺寸唯一数据源（v1.3.4）**：`cfg::BUILDING_INFOS[i].w/.h` → 用 `cfg::buildingSize(type)` 查询。**全项目 22 种建筑统一 1×1**（旧版发电机曾误设为 2×2，已修正）。放置判定 / `registerToGrid` / 物流邻接 / 放置预览 / 面编辑器全部走这个入口，**禁止硬编码**。若将来引入多格建筑，遍历"每一面的外侧格"用 `faceNeighborTiles(b, dir)`（`components/Building.h`）。
 - EnTT 3.13 注意：`view` **没有** `size()/empty()`（用 `std::distance` 或迭代器比较）；`view<T>().each()` 单组件解包是 2 元组（entity+comp），结构化绑定数量必须对上。
 
 ### 4.2 Game::update 顺序（Game.cpp，改动时保持该顺序）
@@ -300,7 +404,7 @@ build\factory-td.exe --selftest-save
 - 机器放置方向=输出面（其余三面 INPUT，GT 式面配置可右键编辑）。
 
 ### 5.4 电网（add.txt ⑤；EU/秒）
-- 燃煤发电机 32EU/s（煤燃5s）；旧版发电机（2×2）1煤→3000EU/3s；电容库 50000EU 容量、64EU/s 充放；电线杆 150px 恒导通；电力塔 8EU/s；采矿机 MINER_POWER_NEED=10（测试期免供）。**合金炉自 v1.2.4 起不耗电**（已从 PowerConsumer 移除，相关断电检查/红点渲染已删）。
+- 燃煤发电机 32EU/s（煤燃5s）；旧版发电机 1煤→3000EU/3s；电容库 50000EU 容量、64EU/s 充放；电线杆 150px 恒导通；电力塔 8EU/s；采矿机 MINER_POWER_NEED=10（测试期免供）。**合金炉自 v1.2.4 起不耗电**（已从 PowerConsumer 移除，相关断电检查/红点渲染已删）。
 - 电力线缆四面向面配置（NONE/INPUT/TRANSFER/OUTPUT），BFS 定向路由。
 - **无损耗、无过载——用户明确"就是这样设计的，不用改"**。
 
@@ -349,9 +453,9 @@ build\factory-td.exe --selftest-save
   - 入口：`Game::gameMode`（`Normal` / `Tutorial`），由 `ui/EntrySystem` 主菜单选择（`T` 教程 / `N` 普通关卡）。
 
 ### 5.10 快捷键总表
-WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉7组装机8发电机9电线杆0燃煤发电机 -电容 =电线 \分流器 / TAB循环 / 左键放置（带方向弹窗） / 右键：**矿机→采矿场设置面板（模式/矿种/旋转输出面）**、组装机配方、通物设备→终端面板、电线机器桶发电机→面编辑器 / DEL拆除返还 / Z X C U 刷怪 / B 商店 / V 工作台 / M 世界地图 / H F1 说明书 / **F2 教程跳过·重开** / F5存 F9读（教程模式不保存/不读取） / ESC：有面板先关面板，否则打开暂停面板（继续游戏/保存存档/设置/返回主界面）
+WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉7组装机8发电机9电线杆0燃煤发电机 -电容 =电线 \分流器 / TAB循环 / 左键放置（带方向弹窗） / 右键：**矿机→采矿场设置面板（模式/矿种/旋转输出面）**、组装机配方、通物设备→终端面板、电线机器桶发电机→面编辑器 / DEL拆除返还 / Z X C U 刷怪 / B 商店 / V 工作台 / M 世界地图 / H F1 说明书 / **F2 教程跳过·重开** / **F5 打开保存槽位页 / F9 打开读取槽位页（10 槽位；教程模式不保存/不读取）** / ESC：有面板先关面板，否则打开暂停面板（继续游戏/保存存档/载入存档/设置/返回主界面）
 
-> 主菜单快捷键：`T` 新手教程 / `N` 普通关卡 / `C` 继续游戏。
+> 主菜单快捷键：`T` 新手教程 / `N` 普通关卡 / `L`（或 `C`）载入存档。
 
 ---
 
@@ -359,7 +463,7 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 0 TowerBasic, 1 TowerRapid, 2 TowerSniper, 3 TowerElectric,
 4 Miner, 5 MinerL2, 6 MinerL3, 7 MinerVoid,
-8 Furnace, 9 Assembler, 10 Generator(旧2×2), 11 PowerPole,
+8 Furnace, 9 Assembler, 10 Generator(旧版大功率), 11 PowerPole,
 12 PowerGenerator, 13 Capacitor, 14 PowerWire,
 15 Pipe, 16 Bucket, 17 Splitter, 18 AlloyFurnace,
 19 MeInterface, 20 MeDrive, 21 MeTerminal
@@ -369,7 +473,7 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 ## 7. 建筑放置与拆除（Game.cpp）
 
-- `canPlace`：越界/占用检查；**管道可放在路径上**（其余建筑要求草地）；2×2 仅旧版发电机。
+- `canPlace`：越界/占用检查；**管道可放在路径上**（其余建筑要求草地）；占地范围来自 `cfg::buildingSize(t)` 逐格扫描（**当前全部建筑 1×1**）。
 - `placeBuilding(tx,ty,t,dir,deduct)`：创建 Building+按类型加组件 → `registerToGrid` → 管道/分流器/ME设备时 `PipeSystem::updateNeighbors` + `MeSystem::markDirty` → 电网相关 `power.dirty=true`。
 - `removeBuilding`：退费 → 注销网格 → destroy → 物流掩码刷新 / 电网脏标记。
 - 成本：`BUILDING_INFOS`（GameConfig.h，可被 config.json `building_costs` 覆盖）；**测试版资源无限**（RESOURCE_INFINITE=true）：`canAfford` 恒真、`deductCost/refundCost` 空操作、全部20物品发999999、读档后补全（这是用户明确要的"对内测试版所有资源无限"）。
@@ -392,9 +496,15 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 ---
 
-## 9. 存档（SaveSystem.cpp，JSON：build/saves/factory_td.json）
+## 9. 存档（SaveSystem.cpp，JSON：build/saves/slot_01.json … slot_10.json）
 
-- 另有**独立**的教程进度存档 `saves/tutorial.json`（v1.3.3，`systems/TutorialSystem.*`），与主存档**互不影响**。
+- **v1.3.4 起为「手动保存 · 10 槽位」**（参考 WorldBox）：`SAVE_SLOT_COUNT=10`，槽位文件 `saves/slot_NN.json`；**没有任何自动保存路径**，只有玩家在暂停面板/主菜单点保存或按 F5 才写盘。
+  - `SaveSlotInfo{path, used, corrupt, bytes, savedAt, summary}`；`querySlot(i)` 解析摘要（`金币 · 第 N 波 · 建筑数`），解析失败→`corrupt`。
+  - `saveGameToSlot / loadGameFromSlot / deleteSlot / anySlotUsed / newestSlot`；底层 `saveGameToFile / loadGameFromFile`（自检复用）。
+  - 写入 `j["v"]=2; j["saved_at"]=本地时间串`；**旧 v1 存档仍可读**（缺 `saved_at` 只影响显示）。
+  - `migrateLegacySave()`：旧单档 `saves/factory_td.json` → `saves/slot_01.json`（槽位 1 已占用则不动）。
+  - UI：启动菜单「载入存档」`L`/`C` + 暂停面板 5 项，共用 2×5 槽位页；覆盖/删除前二次确认、默认焦点「取消」；`F5`/`F9` = 打开保存/读取槽位页（不再直接读写盘）。
+- 另有**独立**的教程进度存档 `saves/tutorial.json`（v1.3.3，`systems/TutorialSystem.*`），与主存档**互不影响**；**教程模式调用 `saveToSlot/loadFromSlot` 会被拒绝并 Toast**（不占用玩家槽位）。
 - **保存顺序**：v/gold/lives/wave状态/cam_x,cam_y/inv → ores(含amount) → buildings → pipes(缓冲) → me_networks → enemies。
 - **加载顺序**：解析JSON(失败直接返回，不清世界) → 清空reg+网格 → 矿点 → 建筑(placeBuilding+恢复各类型状态+统一恢复faces) → 管道缓冲(按坐标直接回填，不再重复place) → ME网络(rebuildNetworks后按编号回填) → 敌人 → 全局状态 → 无限资源补全 → power.dirty。
 - **每类建筑保存/恢复的内容**：塔(ammo/barrel/power)、矿机(level/void/acc/**库存items** + v1.3.3 新增 **fixed_ore/ore_filter/has_bound/bound_x/bound_y**)、熔炉合金组装机(has_job/job_input/job_time/job_total/recipe/items)、发电机(coal/fuel_time/burn)、桶(items/output_timer)、电容(energy)、分流器(queue/output_index)、**所有 FaceConfig 统一保存 faces**、摄像机。
@@ -443,7 +553,11 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 22. **SFML `setVerticalSyncEnabled` 与 `setFramerateLimit` 互相拆台**（v1.3.3 踩过）：必须走 `gset::applyFrameMode()` 唯一入口，按固定顺序"二选一"；别在别处再直接调这两个 setter。
 23. **一切"速度"乘 `dt`、"平滑"用帧率无关形式**（v1.3.3 踩过）：`Camera` 原先每帧固定步长，144Hz 屏上比 60Hz 快 2.4 倍。新增移动/动画/计时同理。
 24. **新增存档字段必须"可缺省"**（v1.3.3 采矿场模式字段的示范）：读取一律 `bj.value("key", 默认值)`，旧存档缺键时回落到旧行为（`fixed_ore` 缺省 = false = 原有模式），且**读档不做任何"自动重排/吸附"**，避免旧存档被悄悄改动。**存档格式只增不改不删**（`type` 字段值尤其不能改）。
-25. **教程进度的落盘必须与主存档隔离**（v1.3.3）：`saves/tutorial.json` 独立文件；教程模式内 `F5`/`F9` 明确提示"不保存/不读取"，**绝不能共用 `saves/factory_td.json`**，否则教学中的临时建造会污染玩家正式存档。
+25. **教程进度的落盘必须与主存档隔离**（v1.3.3）：`saves/tutorial.json` 独立文件；教程模式内 `F5`/`F9` 明确提示"不保存/不读取"，**绝不能共用主存档**，否则教学中的临时建造会污染玩家正式存档。
+26. **本作是手动存档，禁止再引入任何自动写盘路径**（v1.3.4）：`Game` 构造末尾、`run()` 退出、`returnToMenu`、`EntrySystem` 退出等处**一律不得调用保存**；写盘只发生在玩家明确选择槽位时（`Game::saveToSlot`）。**"新开一局 → 直接关窗"绝不能覆盖任何存档**——这是本版重构的根本目的，回退即事故。
+27. **旧符号清理要彻底**（v1.3.4 踩过）：改接口（`saveGame/loadGame`→`saveToSlot/loadFromSlot`、删单档 `kSavePath`/`Dialog::ConfirmNewGame`）后，务必全仓搜索旧名（`main.cpp` 自检、`PlayerSystem` 的 F5/F9、`EntrySystem::advanceLoading/requestStart` 都曾残留引用）——**编译通过 ≠ 全部清理**，但旧符号残留必然编译失败，所以改完**立刻编译**。
+28. **建筑尺寸只能从 `cfg::buildingSize()` 取**（v1.3.4）：以前 `canPlace` 和 `placeBuilding` 各自内联 `t == Generator ? 2 : 1`，改一处忘另一处就会"能放但只占1格"（该 2×2 已废止，现全部 1×1）。新增任何多格建筑：**只改 `BUILDING_INFOS` 那一行的 `w/h`**，其余全部自动跟随（`registerToGrid`/`removeBuilding`/`hitBuilding`/`drawGridSprite` 本来就按 `b.w/b.h` 走）。
+29. **多格建筑别只扫"左上格"的邻居**（v1.3.4）：任何"遍历建筑四邻"的代码都可能是 1×1 思维。用 `faceNeighborTiles(b, dir)` 逐格遍历每个面的外侧格——旧版 2×2 发电机曾因此只有左/上方能进煤（下/右两面接管道无效）。注意 `continue` 的作用域会从"面向"变成"格向"，语义上是变好了，但要确认无误。
 
 ---
 
@@ -451,6 +565,7 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 | 事项 | 状态（用户原话） |
 |---|---|
+| **手动存档 · 10 槽位（v1.3.4，已发布）** | **代码完成、编译/自检/冒烟通过、文档已同步**；遗留 = 人工实机走查（槽位排版 / 覆盖·删除确认交互 / 旧档迁移，见 §0.4） |
 | 新手教程模式 + 叙事播报（v1.3.3，已发布） | **代码完成、编译/自检/冒烟通过、文档已同步**；遗留 = 人工实机走查（教程全流程 / 通讯条观感，见 §0） |
 | 采矿场双模式（v1.3.3，已发布） | 代码完成；遗留 = 实机确认"吸附位置 + 两模式产率一致 + 读档恢复"（见 §0） |
 | 贴图朝向 / 高刷速度 / 高DPI 修复（v1.3.3，已发布） | 代码完成；遗留 = 实机目视确认（这三项**必须人眼验证**，见 §0.3） |
@@ -487,6 +602,6 @@ WASD 镜头 / 滚轮缩放 / 空格暂停 / 1塔2电塔3矿机4管道5桶6熔炉
 
 ## 14. 版本与文档
 
-- 代码版本进度见 `update.md`：**Alpha v1.3.3 为当前版本**（品牌重塑《织星计划》+ 新手教程模式 + 叙事播报 + 采矿场双模式 + 贴图/高刷/高DPI 修复 + ME→通物）；v1.3.2 游戏内暂停面板 + 设置项共用化；v1.3.1 启动入口系统 + 跨场景用户设置；v1.3.0 游戏内说明书 / 新手引导；v1.2.4 商店与背包重构 + 合金炉改为选定配方且无需电力；v1.2.3 ME 接口输出过滤 + GUI/贴图重设计；v1.2.1 ME 网络 + 存档修复；v1.2.0 为 add.txt 主体功能（含管道设计解析）；v1.1.0 为早期重构。
+- 代码版本进度见 `update.md`：**Alpha v1.3.4 为当前版本**（**手动存档 · 10 槽位**，参考《世界盒子》；旧单档自动迁移到槽位 1）；v1.3.3 品牌重塑《织星计划》+ 新手教程模式 + 叙事播报 + 采矿场双模式 + 贴图/高刷/高DPI 修复 + ME→通物；v1.3.2 游戏内暂停面板 + 设置项共用化；v1.3.1 启动入口系统 + 跨场景用户设置；v1.3.0 游戏内说明书 / 新手引导；v1.2.4 商店与背包重构 + 合金炉改为选定配方且无需电力；v1.2.3 ME 接口输出过滤 + GUI/贴图重设计；v1.2.1 ME 网络 + 存档修复；v1.2.0 为 add.txt 主体功能（含管道设计解析）；v1.1.0 为早期重构。
 - 注意 update.md 里的日期（08-15~17）比实际开发日（08-25）滞后一周左右，继续写时用真实日期即可。
 - Python 老版在 `python版（老版）/`，PORTING.md 有逐文件对照，不再维护。

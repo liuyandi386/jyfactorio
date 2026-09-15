@@ -1,6 +1,6 @@
 # Factorio风格2D工厂塔防游戏
 
-> **当前主力版本：C++ 重构版（`factory-td/` 工程）——Alpha v1.3.3**
+> **当前主力版本：C++ 重构版（`factory-td/` 工程）——Alpha v1.3.4**
 > ——《织星计划 Project Weavestar》：你是「织星工业」的外派工程师，建厂 · 清障 · 交付，然后前往下一颗星球。
 > 历史版本：Python + pygame-ce 版（`python版（老版）/`，已停止开发）
 
@@ -12,12 +12,12 @@
 
 ## 下载与运行（免安装）
 
-> **⬇ [factory-td-v1.3.3-win64.zip](https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.3/factory-td-v1.3.3-win64.zip)**
+> **⬇ [factory-td-v1.3.4-win64.zip](https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.4/factory-td-v1.3.4-win64.zip)**
 > —— Windows 64 位绿色包，解压即玩。
 
 1. 下载 zip 后**把整个文件夹一起解压**到任意目录（不要只把 exe 单独拖出来）。
 2. 双击 `factory-td.exe` 开始游戏；**无需安装 SFML、编译器或任何运行库**。
-3. 存档与设置自动生成在解压目录的 `saves/` 下（F5 保存 / F9 读取）。
+3. 存档与设置自动生成在解压目录的 `saves/` 下（**手动保存**：F5 打开保存槽位页 / F9 打开读取槽位页；共 10 个独立槽位）。
 
 包内清单：`factory-td.exe`、SFML 运行库 + MinGW 运行时 DLL、`assets/`（数值配置 / 贴图 / 中文字体）、`README.md`、`docs/`（`update.md` 等全部文档）、`运行说明.txt`。
 
@@ -79,7 +79,7 @@ Linux/macOS 同理，使用 `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsys
 
 **性能分析（可选）**：先安装 tracy，再 `-DTRACY_ENABLE=ON` 启用打点。
 
-**存档自检（可选）**：`build\factory-td.exe --selftest-save` 运行存档保存→读档往返自检（21 项核对，自动备份/恢复你的存档，退出码 0=通过）。
+**存档自检（可选）**：`build\factory-td.exe --selftest-save` 运行存档保存→读档往返自检（25 项核对，含建筑占地规格，使用独立临时文件，**不触碰你的任何槽位存档**，退出码 0=通过）。
 
 ## 打包发布（免安装绿色包）
 
@@ -88,7 +88,7 @@ Linux/macOS 同理，使用 `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsys
 ```bat
 cd factory-td
 build.bat      :: 1. 编译（对外发布建议用可分发构建，见下）
-package.bat    :: 2. 自动打包 → dist\factory-td-v1.3.3-win64.zip
+package.bat    :: 2. 自动打包 → dist\factory-td-v1.3.4-win64.zip
 ```
 
 `package.bat` 按当前项目结构自动收集：
@@ -132,16 +132,16 @@ package.bat nobuild    :: 跳过重编译，直接用现有 build 打包（自�
 ### 发布到 GitHub Releases
 
 ```bat
-git tag -a v1.3.3 -m "Alpha v1.3.3"
-git push origin v1.3.3
+git tag -a v1.3.4 -m "Alpha v1.3.4"
+git push origin v1.3.4
 ```
 
-然后打开 `https://github.com/liuyandi386/jyfactorio/releases/new?tag=v1.3.3`，把 `dist\factory-td-v1.3.3-win64.zip` 拖进 **Attach binaries**，标题填 `Alpha v1.3.3`，正文可直接用 `update.md` 里对应章节，点 **Publish release**。
+然后打开 `https://github.com/liuyandi386/jyfactorio/releases/new?tag=v1.3.4`，把 `dist\factory-td-v1.3.4-win64.zip` 拖进 **Attach binaries**，标题填 `Alpha v1.3.4`，正文可直接用 `update.md` 里对应章节，点 **Publish release**。
 
 发布后该文件的永久下载地址（文档中用的就是它）：
 
 ```
-https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.3/factory-td-v1.3.3-win64.zip
+https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.4/factory-td-v1.3.4-win64.zip
 ```
 
 > **地址规则**：`releases/download/<tag>/<附件文件名>`，tag 名与文件名必须完全一致，否则 404。`releases/latest/download/<文件名>` 始终指向最新版，但文件名带版本号，升版后会失效。
@@ -154,13 +154,13 @@ https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.3/factory-td-v1
 
 ```
 启动动画(工作室 logo，任意键/点击跳过)
-   → 标题界面 / 主菜单（新手教程 · 普通关卡 · 继续游戏 · 设置 · 关于本作 · 退出游戏）
+   → 标题界面 / 主菜单（新手教程 · 普通关卡 · 载入存档 · 设置 · 关于本作 · 退出游戏）
    → (设置界面)
    → 加载界面（真实加载 + 迷你地图预览）
    → 创建游戏（进入新手教程 或 普通关卡）
 ```
 
-- **主菜单**：↑↓ 选择、Enter 确认，鼠标可点可悬停；无存档时「继续游戏」置灰；已有存档时「普通关卡」会弹二次确认。快捷键 `T` 新手教程 / `N` 普通关卡 / `C` 继续游戏。
+- **主菜单**：↑↓ 选择、Enter 确认，鼠标可点可悬停。快捷键 `T` 新手教程 / `N` 普通关卡 / `L`（或 `C`）载入存档。**手动存档模式下「普通关卡」新开局不会写盘/覆盖任何存档，因此无需二次确认。**
 - **两种模式完全独立**：**新手教程**是一个独立的引导关卡（进度单独存 `saves/tutorial.json`，模式内 `F5`/`F9` 明确提示"不保存/不读取"，不会覆盖普通关卡存档）；**普通关卡**不接入引导系统。
 - **加载界面**：不是假动画——依次真正执行「读取 config.json → 校验存档 → 展开敌人路径 → 生成矿点分布 → 初始化视图」，并把真实算出的**敌人路径 + 矿点分布**画成迷你地图预览（与进游戏后看到的布局一致）。
 - **设置界面**（↑↓ 选择、←→ / Enter 改值、Esc 返回）共 4 项，均持久化到 `saves/settings.json`；**启动菜单与游戏内暂停面板共用同一份设置**：
@@ -176,6 +176,10 @@ https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.3/factory-td-v1
 >
 > 应急参数：黑屏时可用 `factory-td.exe --safe-mode`（= `--windowed`）强制 1280×720 窗口化 + 垂直同步启动，**不会写回** `saves/settings.json`。
 > 高刷新率屏建议保持「垂直同步」默认值；想要"恒定手感"可固定 60。
+>
+> **输入法**：游戏**没有任何文本输入**，因此窗口创建时会**主动禁用输入法**（`ImmAssociateContext` / `ImmDisableIME` + 拦截 `WM_IME_*`）。
+> 这样切到中文输入法时，候选窗/语言栏不会再弹到无边框全屏画面上、也不会再与置顶窗口互抢焦点导致**闪屏/鼠标漂移**。
+> 若你的系统仍偶发闪屏，请优先检查输入法的"悬浮窗/候选窗跟随"设置，或临时用 `--windowed` 启动（该问题在《我的世界》1.7.10 等老式全屏窗口上同样存在，属于共性现象）。
 
 ## 操作说明
 
@@ -196,7 +200,7 @@ https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.3/factory-td-v1
 | **B** | **商店（全屏）**：金币+电路板兑换矿石/合金/机器（价目表 `config.json`）；兑换的机器进背包 |
 | **V** | **随身工作台**：手工合成前期物品（电路板/弹药） |
 | **M** | **世界地图**（Xaero's World Map 式全屏总览；左下角常驻小地图） |
-| F5 / F9 | 保存 / 读取存档（JSON：`saves/factory_td.json`；**教程模式不保存/不读取**） |
+| F5 / F9 | 打开**保存 / 读取**存档槽位页（共 **10 个独立槽位** `saves/slot_01..10.json`；**教程模式不保存/不读取**） |
 | **H / F1** | **游戏说明书**（6 个标签页） |
 | **F2** | **仅教程模式**：引导进行中 = 跳过引导，否则 = 重新开始引导 |
 | ESC | 有面板时关闭面板（面配置编辑器 / 配方菜单 / 商店 / 工作台 / 世界地图 / 说明书 / **采矿场设置面板**）；无面板时打开**暂停面板** |
@@ -207,7 +211,9 @@ https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.3/factory-td-v1
 >
 > **新手教程**：主菜单「新手教程」进入的独立引导关卡，织女星（随船 AI）逐步带你走完采矿 → 运输 → 冶炼 → 加工 → 防御 → 供电 → 自动化；顶部有引导横幅与步骤进度，可随时按 `F2` 跳过。进度存 `saves/tutorial.json`，与普通关卡存档互不影响。
 
-> **暂停面板（ESC）**：参考《我的世界》的暂停菜单，全屏变暗 + 居中按钮列，含 **继续游戏 / 保存存档 / 设置 / 返回主界面**；↑↓ 选择、Enter 确认、Esc 继续游戏，鼠标可点可悬停。面板打开时世界冻结。「设置」子页与启动菜单的设置**完全一致**（显示模式也能在游戏内直接切换，会即时重建窗口）；「返回主界面」会**先自动保存**再回到标题菜单。
+> **暂停面板（ESC）**：参考《我的世界》的暂停菜单，全屏变暗 + 居中按钮列，含 **继续游戏 / 保存存档 / 载入存档 / 设置 / 返回主界面**；↑↓ 选择、Enter 确认、Esc 继续游戏，鼠标可点可悬停。面板打开时世界冻结。「保存存档」「载入存档」打开 **10 槽位管理页**（↑↓←→ 选槽、Enter 执行、Delete 删除；覆盖/删除前二次确认）。“设置”子页与启动菜单的设置**完全一致**（显示模式也能在游戏内直接切换，会即时重建窗口）；**手动存档模式下「返回主界面」不再自动保存**。
+>
+> **存档槽位页**：2 列 × 5 行共 10 个槽位卡片，显示**空槽 / 存档时间 / 摘要（金币·波次·建筑数）**；损坏存档会标注「存档损坏」。旧的单文件存档 `saves/factory_td.json` 会在首次启动时**自动迁移到槽位 1**。
 
 ## 配方与数值
 
@@ -239,7 +245,7 @@ jyfactorio/
 │   │   ├── Game.h/cpp           # 游戏主控（对应Python Game+GameScene）
 │   │   ├── Camera.h/cpp         # 摄像机（自适应窗口尺寸）
 │   │   ├── AssetManager.h/cpp   # 贴图/字体加载+程序化生成（地形/机器/矿石/中文字体打包）
-│   │   ├── SaveSystem.h/cpp     # JSON 存档(F5/F9)
+│   │   ├── SaveSystem.h/cpp     # JSON 存档：10 槽位手动保存（F5/F9 打开槽位页）
 │   │   ├── ui/GameUI.h/cpp      # 暗色工业风HUD/按钮/面编辑器/商店/工作台/小地图/世界地图/采矿场设置面板
 │   │   ├── ui/EntrySystem.h/cpp # 启动入口（启动动画/主菜单/设置/加载预览）
 │   │   ├── Settings.h/cpp       # 跨场景用户设置（显示模式/悬停提示/摄像机速度/帧率·垂直同步）

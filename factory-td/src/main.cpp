@@ -97,13 +97,10 @@ int buildingCount(Game& g, cfg::BuildingType t) {
 
 int runSelftestSave() {
     namespace fs = std::filesystem;
-    // ---- 备份玩家存档（自检会覆盖 saves/factory_td.json） ----
-    const std::string save = "saves/factory_td.json";
-    const std::string bak = "saves/factory_td.json.selftest_bak";
+    // ---- 自检写入独立的临时文件，绝不触碰玩家的 10 个槽位存档 ----
+    const std::string save = "saves/_selftest_slot.json";
     std::error_code ec;
-    fs::remove(bak, ec);
-    const bool hadSave = fs::exists(save);
-    if (hadSave) fs::copy_file(save, bak, ec);
+    fs::remove(save, ec);   // 清掉上次自检可能残留的文件
 
     Game game;   // 初始化窗口/资源/地形/矿点
 
@@ -125,6 +122,36 @@ int runSelftestSave() {
                             bucket != entt::null && wire != entt::null && tower != entt::null &&
                             assembler != entt::null && splitter != entt::null && alloy != entt::null &&
                             gen != entt::null && meI != entt::null && meD != entt::null && meT != entt::null);
+
+    // ---- 占地尺寸规格审计（唯一数据源 cfg::BUILDING_INFOS / cfg::buildingSize）----
+    // ① 静态：全部建筑统一 1×1，不存在任何多格建筑（2×2 发电机已废止）
+    {
+        int multiCell = 0;
+        const char* multiName = "";
+        for (int i = 0; i < cfg::BUILDING_COUNT; ++i) {
+            const auto sz = cfg::buildingSize(static_cast<cfg::BuildingType>(i));
+            if (sz.w != 1 || sz.h != 1) {
+                ++multiCell;
+                multiName = cfg::BUILDING_INFOS[static_cast<size_t>(i)].nameZh;
+            }
+        }
+        (void)multiName;
+        check("占地规格：全部建筑均为1×1", multiCell == 0);
+    }
+    // ② 实地：找一块空地放置旧版发电机，验证 canPlace 逐格扫描、
+    //     占地 1×1 仅登记 1 格、且该格被阻挡
+    int gx = -1, gy = -1;
+    for (int ty = 40; ty < 90 && gx < 0; ++ty)
+        for (int tx = 40; tx < 110; ++tx)
+            if (game.canPlace(tx, ty, cfg::BuildingType::Generator)) { gx = tx; gy = ty; break; }
+    entt::entity legacyGen = (gx >= 0)
+        ? game.placeBuilding(gx, gy, cfg::BuildingType::Generator, cfg::Dir::DOWN, false)
+        : entt::null;
+    check("发电机：占地1×1且单格登记", legacyGen != entt::null &&
+        game.reg.get<Building>(legacyGen).w == 1 && game.reg.get<Building>(legacyGen).h == 1 &&
+        game.isOccupied(gx, gy) && !game.isOccupied(gx + 1, gy) && !game.isOccupied(gx, gy + 1));
+    check("占用格阻挡新建筑", legacyGen != entt::null &&
+        !game.canPlace(gx, gy, cfg::BuildingType::TowerBasic));
 
     // 机器库存 / 任务状态
     game.reg.get<Inventory>(miner).add(cfg::ItemType::CopperOre, 123);
@@ -179,17 +206,17 @@ int runSelftestSave() {
         game.reg.view<GridPos, OreDeposit>().begin(), game.reg.view<GridPos, OreDeposit>().end()));
 
     // ---- 保存 ----
-    check("saveGame()成功", ::saveGame(game));
+    check("saveGameToFile()成功", ::saveGameToFile(game, save));
 
     // ---- 手动清空整个世界（模拟重新进游戏） ----
     game.reg.clear();
     for (auto& cell : game.grid.cells) cell.building = entt::null;
 
     // ---- 读档 ----
-    check("loadGame()成功", ::loadGame(game));
+    check("loadGameFromFile()成功", ::loadGameFromFile(game, save));
 
     // ---- 逐项核对 ----
-    check("建筑总数13", buildingCount(game, cfg::BuildingType::TowerBasic) == 1 &&
+    check("建筑总数14", buildingCount(game, cfg::BuildingType::TowerBasic) == 1 &&
                         buildingCount(game, cfg::BuildingType::Miner) == 1 &&
                         buildingCount(game, cfg::BuildingType::Furnace) == 1 &&
                         buildingCount(game, cfg::BuildingType::Pipe) == 1 &&
@@ -199,9 +226,19 @@ int runSelftestSave() {
                         buildingCount(game, cfg::BuildingType::Splitter) == 1 &&
                         buildingCount(game, cfg::BuildingType::AlloyFurnace) == 1 &&
                         buildingCount(game, cfg::BuildingType::PowerGenerator) == 1 &&
+                        buildingCount(game, cfg::BuildingType::Generator) == 1 &&
                         buildingCount(game, cfg::BuildingType::MeInterface) == 1 &&
                         buildingCount(game, cfg::BuildingType::MeDrive) == 1 &&
                         buildingCount(game, cfg::BuildingType::MeTerminal) == 1);
+
+    // 读档后占地必须完整恢复（尺寸由类型派生，统一 1×1）
+    {
+        const entt::entity lg = findBuilding(game, cfg::BuildingType::Generator);
+        check("读档后发电机占地1×1", lg != entt::null &&
+            game.reg.get<Building>(lg).w == 1 && game.reg.get<Building>(lg).h == 1 &&
+            game.isOccupied(game.reg.get<Building>(lg).pos.x,
+                            game.reg.get<Building>(lg).pos.y));
+    }
 
     entt::entity f2 = findBuilding(game, cfg::BuildingType::Furnace);
     check("熔炉库存(铁矿石×7)", f2 != entt::null &&
@@ -260,9 +297,8 @@ int runSelftestSave() {
         return n == 1 && fast;
     }());
 
-    // ---- 恢复玩家存档 ----
+    // ---- 清理自检产生的临时文件 ----
     fs::remove(save, ec);
-    if (hadSave) fs::rename(bak, save, ec);
 
     // ---- 汇总 ----
     int fails = 0;
@@ -301,9 +337,11 @@ int main(int argc, char** argv) {
     // 循环：游戏内暂停面板选「返回主界面」后重新进入入口系统（等价于回到上一级菜单）
     while (true) {
         EntryAction action = EntryAction::NewGame;
+        int slot = -1;                      // Continue 时要载入的槽位（0..9）
         {
             EntrySystem entry;              // 自带窗口；离开作用域即销毁
             action = entry.run();
+            slot = entry.chosenSlot();      // 必须在销毁前取出
         }
         if (action == EntryAction::Quit) return 0;
 
@@ -312,7 +350,7 @@ int main(int argc, char** argv) {
             const GameMode mode = (action == EntryAction::Tutorial) ? GameMode::Tutorial
                                                                     : GameMode::Normal;
             Game game(mode);                // 初始化窗口/资源/地形/矿点
-            if (action == EntryAction::Continue) game.loadGame();   // 普通关卡 · 读取上次存档
+            if (action == EntryAction::Continue) game.loadFromSlot(slot);   // 普通关卡 · 读取选中槽位
             game.run();                     // 游戏主循环
             if (!game.returnToMenu) return 0;   // 关窗 = 正常退出
         }

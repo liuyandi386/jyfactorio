@@ -16,6 +16,7 @@
 #include <SFML/Graphics.hpp>
 #include "GameConfig.h"
 #include "Settings.h"               // SETTING_ROW_COUNT（设置子页与主菜单共用）
+#include "SaveSystem.h"             // SAVE_SLOT_COUNT / SaveSlotInfo（存档槽位面板）
 
 class Game;
 
@@ -86,10 +87,16 @@ public:
     void hideHelp() { helpOpen_ = false; }
     bool helpOpen() const { return helpOpen_; }
 
-    /// 暂停面板（ESC 打开）：继续游戏 / 保存存档 / 设置 / 返回主界面
+    /// 暂停面板（ESC 打开）：继续游戏 / 保存存档 / 载入存档 / 设置 / 返回主界面
     void openPausePanel();
     void closePausePanel();
     bool pausePanelOpen() const { return pausePanelOpen_; }
+
+    /// 存档槽位面板（暂停面板子页）：Save = 保存到槽位，Load = 从槽位读取
+    enum class SlotPanelMode { Save, Load };
+    /// 打开槽位面板（暂停菜单的「保存存档 / 载入存档」与 F5 / F9 都走这里）
+    void openSlotPanel(SlotPanelMode mode);
+    bool slotPanelOpen() const { return pausePanelOpen_ && pauseSlotOpen_; }
     /// 取出"需按新显示模式重建窗口"的待处理标记（由 Game 主循环在事件循环外消费）
     bool consumeDisplayApply() {
         const bool v = pauseDisplayApply_;
@@ -133,10 +140,27 @@ private:
     // ---- 暂停面板 ----
     void handlePauseKey(const sf::Event::KeyEvent& k);
     void handlePauseClick(sf::Vector2f pos);
-    void activatePauseItem(int i);      // 主菜单项：继续游戏/保存存档/设置/返回主界面
-    /// 暂停面板主菜单按钮矩形（4 项）/ 设置子页行矩形（绘制与点击共用）
-    std::array<sf::FloatRect, 4> pauseMenuRects() const;
+    void activatePauseItem(int i);      // 主菜单项：继续/保存/载入/设置/返回主界面
+    /// 暂停面板主菜单按钮矩形（5 项）/ 设置子页行矩形（绘制与点击共用）
+    std::array<sf::FloatRect, 5> pauseMenuRects() const;
     std::array<sf::FloatRect, gset::SETTING_ROW_COUNT> pauseSettingRects() const;
+
+    // ---- 暂停面板 · 存档槽位子页（WorldBox 式 10 槽位） ----
+    void refreshSlotInfos();                    // 重新扫描各槽位状态（打开/写盘后调用）
+    void handleSlotKey(const sf::Event::KeyEvent& k);
+    void handleSlotClick(sf::Vector2f pos);
+    void activateFocusedSlot();                 // 主操作：保存到该槽位 / 从该槽位读取
+    void deleteFocusedSlot();                   // 「删除该槽位」
+    void runSlotConfirm();                      // 二次确认对话框点「确定」后真正执行
+    /// 槽位格子矩形（2 列 × 5 行）/ 底部按钮矩形（主操作·删除·返回）
+    std::array<sf::FloatRect, SAVE_SLOT_COUNT> slotTileRects() const;
+    std::array<sf::FloatRect, 3> slotButtonRects() const;
+    /// 二次确认对话框：面板矩形 / 两个按钮矩形
+    sf::FloatRect slotConfirmPanelRect() const;
+    std::array<sf::FloatRect, 2> slotConfirmRects() const;
+    /// 按当前确认类型填充文案（标题 / 正文 / 确定按钮文字）
+    void slotConfirmText(std::string& title, std::vector<std::string>& lines,
+                         std::string& okLabel) const;
 
     // ---- 绘制 ----
     void drawResourceBar(sf::RenderTarget& rt);
@@ -158,6 +182,8 @@ private:
     void drawPausePanel(sf::RenderTarget& rt);   // 暂停面板（最顶层模态）
     void drawPauseMenu(sf::RenderTarget& rt);
     void drawPauseSettings(sf::RenderTarget& rt);
+    void drawPauseSlots(sf::RenderTarget& rt);   // 存档槽位子页（10 槽位）
+    void drawSlotConfirm(sf::RenderTarget& rt);  // 覆盖/删除/读取/返回的二次确认
     void drawOverlays(sf::RenderTarget& rt);  // 暂停/游戏结束
     void drawText(sf::RenderTarget& rt, const std::string& s, unsigned size,
                   sf::Vector2f pos, sf::Color color, bool centered = false,
@@ -259,12 +285,22 @@ private:
     sf::FloatRect helpPanel_{};             // 内容区矩形
     std::array<sf::FloatRect, 6> helpTabRects_{};  // 标签按钮
 
-    // 暂停面板（ESC 打开）：继续游戏 / 保存存档 / 设置 / 返回主界面
+    // 暂停面板（ESC 打开）：继续游戏 / 保存存档 / 载入存档 / 设置 / 返回主界面
     bool pausePanelOpen_ = false;
     bool pauseSettingsOpen_ = false;        // 「设置」子页（与主菜单设置共用逻辑）
     bool pauseDisplayApply_ = false;        // 显示模式已改 → 待 Game 重建窗口
     int pauseFocus_ = 0;                    // 主菜单焦点行
     int pauseSettingRow_ = 0;               // 设置子页焦点行
-    std::array<sf::FloatRect, 4> pauseRects_{};                  // 主菜单 4 项
+    std::array<sf::FloatRect, 5> pauseRects_{};                  // 主菜单 5 项
     std::array<sf::FloatRect, gset::SETTING_ROW_COUNT> pauseSettingRects_{}; // 设置子页各行矩形
+
+    // ---- 存档槽位子页 ----
+    bool pauseSlotOpen_ = false;            // 槽位子页是否打开
+    SlotPanelMode slotMode_ = SlotPanelMode::Save;
+    int slotFocus_ = 0;                     // 当前焦点槽位（0..9）
+    std::array<SaveSlotInfo, SAVE_SLOT_COUNT> slotInfos_{};   // 槽位状态快照
+    /// 需要二次确认的危险操作（WorldBox 式：覆盖 / 删除 / 读档 / 返回主界面）
+    enum class SlotConfirm { None, Overwrite, Delete, Load, ReturnMenu };
+    SlotConfirm slotConfirm_ = SlotConfirm::None;
+    int slotConfirmFocus_ = 0;              // 0 = 确定，1 = 取消
 };

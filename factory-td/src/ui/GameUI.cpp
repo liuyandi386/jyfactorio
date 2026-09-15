@@ -129,7 +129,21 @@ bool GameUI::handleEvent(const sf::Event& e) {
         if (e.type == sf::Event::MouseMoved) {
             const sf::Vector2f mp(static_cast<float>(e.mouseMove.x),
                                   static_cast<float>(e.mouseMove.y));
-            if (pauseSettingsOpen_) {
+            if (slotConfirm_ != SlotConfirm::None) {
+                const auto rs = slotConfirmRects();      // 对话框按钮悬停
+                for (int i = 0; i < 2; ++i)
+                    if (rs[static_cast<size_t>(i)].contains(mp)) {
+                        slotConfirmFocus_ = i;
+                        break;
+                    }
+            } else if (pauseSlotOpen_) {
+                const auto tiles = slotTileRects();      // 槽位格子悬停即选中
+                for (int i = 0; i < SAVE_SLOT_COUNT; ++i)
+                    if (tiles[static_cast<size_t>(i)].contains(mp)) {
+                        slotFocus_ = i;
+                        break;
+                    }
+            } else if (pauseSettingsOpen_) {
                 const auto rects = pauseSettingRects();
                 for (int i = 0; i < gset::SETTING_ROW_COUNT; ++i)
                     if (rects[static_cast<size_t>(i)].contains(mp)) {
@@ -138,7 +152,7 @@ bool GameUI::handleEvent(const sf::Event& e) {
                     }
             } else {
                 const auto rects = pauseMenuRects();
-                for (int i = 0; i < 4; ++i)
+                for (int i = 0; i < 5; ++i)
                     if (rects[static_cast<size_t>(i)].contains(mp)) {
                         pauseFocus_ = i;
                         break;
@@ -294,11 +308,14 @@ void GameUI::handleFaceEditorClick(sf::Vector2f pos) {
         }
     }
     // 点击编辑器外部 → 关闭（Python: 中心矩形膨胀3倍外即关闭）
+    // 按真实占地放大关闭范围（当前全部 1×1 → 3 格）
     const auto& b = g_->reg.get<Building>(target);
     const auto center = g_->buildingCenter(b);
     const auto sc = g_->worldToScreen(center);
     const float size = cfg::TILE_SIZE * g_->camera.zoom;
-    sf::FloatRect zone(sc.x - size * 1.5f, sc.y - size * 1.5f, size * 3.0f, size * 3.0f);
+    const float zoneW = size * static_cast<float>(b.w + 2);
+    const float zoneH = size * static_cast<float>(b.h + 2);
+    sf::FloatRect zone(sc.x - zoneW / 2.0f, sc.y - zoneH / 2.0f, zoneW, zoneH);
     if (!zone.contains(pos)) g_->faceEditTarget = entt::null;
 }
 
@@ -312,11 +329,14 @@ std::array<sf::FloatRect, 4> GameUI::faceEditorRects() const {
     const float size = cfg::TILE_SIZE * g_->camera.zoom;
     const float bs = std::max(24.0f, 28.0f * g_->camera.zoom);
     const float cx = sc.x, cy = sc.y;
+    // 面按钮要推到「整块占地」之外（当前全部 1×1 → 1 格）
+    const float offX = size * static_cast<float>(b.w + 1) * 0.5f;
+    const float offY = size * static_cast<float>(b.h + 1) * 0.5f;
     // Python _draw_face_editor: 四个方向按钮围绕中心
-    rects[cfg::Dir::UP]    = {cx - bs / 2.0f, cy - size - bs / 2.0f, bs, bs};
-    rects[cfg::Dir::RIGHT] = {cx + size - bs / 2.0f, cy - bs / 2.0f, bs, bs};
-    rects[cfg::Dir::DOWN]  = {cx - bs / 2.0f, cy + size - bs / 2.0f, bs, bs};
-    rects[cfg::Dir::LEFT]  = {cx - size - bs / 2.0f, cy - bs / 2.0f, bs, bs};
+    rects[cfg::Dir::UP]    = {cx - bs / 2.0f, cy - offY - bs / 2.0f, bs, bs};
+    rects[cfg::Dir::RIGHT] = {cx + offX - bs / 2.0f, cy - bs / 2.0f, bs, bs};
+    rects[cfg::Dir::DOWN]  = {cx - bs / 2.0f, cy + offY - bs / 2.0f, bs, bs};
+    rects[cfg::Dir::LEFT]  = {cx - offX - bs / 2.0f, cy - bs / 2.0f, bs, bs};
     return rects;
 }
 
@@ -1518,16 +1538,18 @@ void GameUI::drawFaceEditor(sf::RenderTarget& rt) {
     overlay.setFillColor(sf::Color(0, 0, 0, 120));
     rt.draw(overlay);
 
-    // 中心高亮框
+    // 中心高亮框（按真实占地：当前全部 1×1 单格）
     const auto center = g_->buildingCenter(b);
     const auto sc = g_->worldToScreen(center);
     const float size = cfg::TILE_SIZE * g_->camera.zoom;
-    sf::RectangleShape hl({size, size});
-    hl.setPosition(sc.x - size / 2.0f, sc.y - size / 2.0f);
+    const sf::Vector2f hlSize{size * static_cast<float>(b.w),
+                              size * static_cast<float>(b.h)};
+    sf::RectangleShape hl(hlSize);
+    hl.setPosition(sc.x - hlSize.x / 2.0f, sc.y - hlSize.y / 2.0f);
     hl.setFillColor(isWire ? sf::Color(255, 255, 0, 80) : sf::Color(0, 255, 255, 80));
     rt.draw(hl);
-    sf::RectangleShape hlBorder({size, size});
-    hlBorder.setPosition(sc.x - size / 2.0f, sc.y - size / 2.0f);
+    sf::RectangleShape hlBorder(hlSize);
+    hlBorder.setPosition(sc.x - hlSize.x / 2.0f, sc.y - hlSize.y / 2.0f);
     hlBorder.setFillColor(sf::Color::Transparent);
     hlBorder.setOutlineColor(isWire ? sf::Color(255, 255, 0) : sf::Color(0, 255, 255));
     hlBorder.setOutlineThickness(3.0f);
@@ -1623,18 +1645,138 @@ void GameUI::openPausePanel() {
 void GameUI::closePausePanel() {
     pausePanelOpen_ = false;
     pauseSettingsOpen_ = false;
+    pauseSlotOpen_ = false;
+    slotConfirm_ = SlotConfirm::None;
     g_->paused = false;       // 恢复游戏
 }
 
-std::array<sf::FloatRect, 4> GameUI::pauseMenuRects() const {
-    const float bw = 340.0f, bh = 54.0f, gap = 12.0f;
+// ---------------------------------------------------------------------
+// 存档槽位子页（WorldBox 式 10 槽位）
+//
+// 手动保存：本作没有任何自动写盘路径，玩家必须在这里（或按 F5）明确
+// 选择槽位才会保存，因此新开一局后直接关窗不会覆盖任何已有存档。
+// ---------------------------------------------------------------------
+void GameUI::openSlotPanel(SlotPanelMode mode) {
+    if (!pausePanelOpen_) {        // F5 / F9 可在游戏内直接唤出（顺带暂停世界）
+        pausePanelOpen_ = true;
+        g_->paused = true;
+        closePanels();
+        hideRecipePopup();
+        g_->faceEditTarget = entt::null;
+    }
+    pauseSettingsOpen_ = false;
+    pauseSlotOpen_ = true;
+    slotMode_ = mode;
+    slotConfirm_ = SlotConfirm::None;
+    slotConfirmFocus_ = 1;         // 危险操作默认落在「取消」，防手滑
+    refreshSlotInfos();
+    slotFocus_ = 0;
+    if (mode == SlotPanelMode::Load) {
+        const int last = newestSlot();       // 默认选中最近一次保存的槽位
+        if (last >= 0) slotFocus_ = last;
+    }
+}
+
+void GameUI::refreshSlotInfos() {
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i)
+        slotInfos_[static_cast<size_t>(i)] = querySlot(i);
+}
+
+std::array<sf::FloatRect, 5> GameUI::pauseMenuRects() const {
+    const float bw = 340.0f, bh = 52.0f, gap = 12.0f;
     const float x = (winW_ - bw) / 2.0f;
-    const float total = 4 * bh + 3 * gap;
+    const float total = 5 * bh + 4 * gap;
     const float y0 = winH_ * 0.5f - total / 2.0f + 34.0f;
-    std::array<sf::FloatRect, 4> r{};
-    for (int i = 0; i < 4; ++i)
+    std::array<sf::FloatRect, 5> r{};
+    for (int i = 0; i < 5; ++i)
         r[static_cast<size_t>(i)] = {x, y0 + static_cast<float>(i) * (bh + gap), bw, bh};
     return r;
+}
+
+std::array<sf::FloatRect, SAVE_SLOT_COUNT> GameUI::slotTileRects() const {
+    const float gap = 12.0f;
+    const float cw = std::min(400.0f, (winW_ - 120.0f - gap) / 2.0f);
+    const float ch = 74.0f;
+    const float x0 = (winW_ - (2.0f * cw + gap)) / 2.0f;
+    const float y0 = winH_ * 0.24f;
+    std::array<sf::FloatRect, SAVE_SLOT_COUNT> r{};
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        const float col = static_cast<float>(i % 2);
+        const float row = static_cast<float>(i / 2);
+        r[static_cast<size_t>(i)] = {x0 + col * (cw + gap), y0 + row * (ch + gap), cw, ch};
+    }
+    return r;
+}
+
+std::array<sf::FloatRect, 3> GameUI::slotButtonRects() const {
+    const auto tiles = slotTileRects();
+    const sf::FloatRect& lastRow = tiles[static_cast<size_t>(SAVE_SLOT_COUNT - 2)];  // 末行左格
+    const float bw = 200.0f, bh = 42.0f, gap = 18.0f;
+    const float x0 = (winW_ - (3 * bw + 2 * gap)) / 2.0f;
+    const float y0 = std::min(lastRow.top + lastRow.height + 20.0f, winH_ - 88.0f);
+    std::array<sf::FloatRect, 3> r{};
+    for (int i = 0; i < 3; ++i)
+        r[static_cast<size_t>(i)] = {x0 + static_cast<float>(i) * (bw + gap), y0, bw, bh};
+    return r;
+}
+
+sf::FloatRect GameUI::slotConfirmPanelRect() const {
+    const float pw = std::min(560.0f, winW_ - 80.0f);
+    const float ph = 236.0f;
+    return {(winW_ - pw) / 2.0f, (winH_ - ph) / 2.0f, pw, ph};
+}
+
+std::array<sf::FloatRect, 2> GameUI::slotConfirmRects() const {
+    const sf::FloatRect p = slotConfirmPanelRect();
+    const float bw = 176.0f, bh = 42.0f, gap = 24.0f;
+    const float bx = p.left + (p.width - (2 * bw + gap)) / 2.0f;
+    const float by = p.top + p.height - bh - 22.0f;
+    std::array<sf::FloatRect, 2> r{};
+    for (int i = 0; i < 2; ++i)
+        r[static_cast<size_t>(i)] = {bx + static_cast<float>(i) * (bw + gap), by, bw, bh};
+    return r;
+}
+
+void GameUI::slotConfirmText(std::string& title, std::vector<std::string>& lines,
+                             std::string& okLabel) const {
+    const int slot = slotFocus_;
+    const SaveSlotInfo& s = slotInfos_[static_cast<size_t>(slot)];
+    const std::string head = "槽位 " + std::string(slot + 1 < 10 ? "0" : "") +
+                             std::to_string(slot + 1);
+    switch (slotConfirm_) {
+        case SlotConfirm::Overwrite:
+            title = "覆盖存档";
+            lines = {head + " 已有存档（" + s.savedAt + " · " + s.summary + "）。",
+                     "覆盖后该槽位的原有进度会被替换，且无法找回。",
+                     "确定要覆盖保存吗？"};
+            okLabel = "覆盖保存";
+            break;
+        case SlotConfirm::Delete:
+            title = "删除存档";
+            lines = {head + " 的存档将被永久删除（" + s.savedAt + " · " + s.summary + "）。",
+                     "删除后无法找回。",
+                     "确定要删除吗？"};
+            okLabel = "删除";
+            break;
+        case SlotConfirm::Load:
+            title = "载入存档";
+            lines = {"载入 " + head + " 会替换当前正在进行的这一局，",
+                     "尚未保存的改动会丢失（可先保存到其它槽位）。",
+                     "确定要载入吗？"};
+            okLabel = "载入";
+            break;
+        case SlotConfirm::ReturnMenu:
+            title = "返回主界面";
+            lines = {"本作采用手动保存：只有你主动保存过的进度才会留下。",
+                     "返回主界面后，这一局未保存的改动会丢失。",
+                     "确定要返回吗？"};
+            okLabel = "返回主界面";
+            break;
+        default:
+            title = "确认";
+            okLabel = "确定";
+            break;
+    }
 }
 
 std::array<sf::FloatRect, gset::SETTING_ROW_COUNT> GameUI::pauseSettingRects() const {
@@ -1653,18 +1795,133 @@ std::array<sf::FloatRect, gset::SETTING_ROW_COUNT> GameUI::pauseSettingRects() c
 void GameUI::activatePauseItem(int i) {
     switch (i) {
         case 0: closePausePanel(); break;                       // 继续游戏
-        case 1: g_->saveGame(); break;                          // 保存存档（Toast 反馈，面板不关）
-        case 2: pauseSettingsOpen_ = true; pauseSettingRow_ = 0; break;  // 设置
-        case 3:                                                 // 返回主界面（先自动保存）
-            g_->saveGame();
-            g_->returnToMenu = true;   // 主循环据此退出，main.cpp 重新进入入口系统
+        case 1: openSlotPanel(SlotPanelMode::Save); break;      // 保存存档（先选槽位）
+        case 2: openSlotPanel(SlotPanelMode::Load); break;      // 载入存档（先选槽位）
+        case 3: pauseSettingsOpen_ = true; pauseSettingRow_ = 0; break;  // 设置
+        case 4:                                                 // 返回主界面（不再自动保存）
+            slotConfirm_ = SlotConfirm::ReturnMenu;
+            slotConfirmFocus_ = 1;   // 默认「取消」
             break;
         default: break;
     }
 }
 
+// ---- 槽位子页：主操作 / 删除 / 确认结果 ----
+void GameUI::activateFocusedSlot() {
+    const SaveSlotInfo& s = slotInfos_[static_cast<size_t>(slotFocus_)];
+    if (slotMode_ == SlotPanelMode::Save) {
+        if (!s.used) {                                  // 空槽位 = 新建存档，无需确认
+            g_->saveToSlot(slotFocus_);
+            refreshSlotInfos();
+            return;
+        }
+        slotConfirm_ = SlotConfirm::Overwrite;           // 覆盖已有进度 → 必须先确认
+        slotConfirmFocus_ = 1;
+        return;
+    }
+    if (!s.used) {                                      // 空槽位没有可读内容
+        showToast("槽位 " + std::to_string(slotFocus_ + 1) + " 号是空的");
+        return;
+    }
+    slotConfirm_ = SlotConfirm::Load;                    // 载入会顶掉当前这一局 → 先确认
+    slotConfirmFocus_ = 1;
+}
+
+void GameUI::deleteFocusedSlot() {
+    if (!slotInfos_[static_cast<size_t>(slotFocus_)].used) {
+        showToast("槽位 " + std::to_string(slotFocus_ + 1) + " 号是空的");
+        return;
+    }
+    slotConfirm_ = SlotConfirm::Delete;                  // 删除不可逆 → 先确认
+    slotConfirmFocus_ = 1;
+}
+
+void GameUI::runSlotConfirm() {
+    const int slot = slotFocus_;
+    switch (slotConfirm_) {
+        case SlotConfirm::Overwrite:
+            g_->saveToSlot(slot);
+            refreshSlotInfos();
+            break;
+        case SlotConfirm::Delete:
+            if (deleteSlot(slot)) {
+                showToast("已删除槽位 " + std::to_string(slot + 1) + " 号");
+                refreshSlotInfos();
+            }
+            break;
+        case SlotConfirm::Load:
+            if (g_->loadFromSlot(slot)) closePausePanel();   // 读档成功后直接回到游戏
+            else refreshSlotInfos();
+            break;
+        case SlotConfirm::ReturnMenu:
+            // 手动保存模式：这里不再自动写盘——玩家没存就是没存
+            g_->returnToMenu = true;   // 主循环据此退出，main.cpp 重新进入入口系统
+            closePausePanel();
+            break;
+        default: break;
+    }
+    slotConfirm_ = SlotConfirm::None;
+}
+
+// ---- 槽位子页：键盘 / 鼠标 ----
+void GameUI::handleSlotKey(const sf::Event::KeyEvent& k) {
+    using K = sf::Keyboard;
+    if (slotConfirm_ != SlotConfirm::None) {          // 确认对话框独占按键
+        switch (k.code) {
+            case K::Left: case K::A: case K::Right: case K::D:
+                slotConfirmFocus_ = (slotConfirmFocus_ + 1) % 2; break;
+            case K::Enter: case K::Space:
+                if (slotConfirmFocus_ == 0) runSlotConfirm();
+                else slotConfirm_ = SlotConfirm::None;
+                break;
+            case K::Delete:
+                if (slotConfirm_ == SlotConfirm::Delete) runSlotConfirm();
+                break;
+            case K::Escape: slotConfirm_ = SlotConfirm::None; break;   // 取消
+            default: break;
+        }
+        return;
+    }
+    switch (k.code) {
+        case K::Left: case K::A:
+            slotFocus_ = (slotFocus_ + SAVE_SLOT_COUNT - 1) % SAVE_SLOT_COUNT; break;
+        case K::Right: case K::D:
+            slotFocus_ = (slotFocus_ + 1) % SAVE_SLOT_COUNT; break;
+        case K::Up: case K::W:
+            slotFocus_ = (slotFocus_ + SAVE_SLOT_COUNT - 2) % SAVE_SLOT_COUNT; break;
+        case K::Down: case K::S:
+            slotFocus_ = (slotFocus_ + 2) % SAVE_SLOT_COUNT; break;
+        case K::Enter: case K::Space: activateFocusedSlot(); break;
+        case K::Delete: deleteFocusedSlot(); break;
+        case K::Escape: pauseSlotOpen_ = false; break;    // 返回暂停主菜单
+        default: break;
+    }
+}
+
+void GameUI::handleSlotClick(sf::Vector2f pos) {
+    if (slotConfirm_ != SlotConfirm::None) {          // 对话框按钮优先，且不穿透
+        const auto rs = slotConfirmRects();
+        if (rs[0].contains(pos)) { runSlotConfirm(); return; }
+        if (rs[1].contains(pos)) { slotConfirm_ = SlotConfirm::None; return; }
+        return;
+    }
+    const auto tiles = slotTileRects();
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        if (!tiles[static_cast<size_t>(i)].contains(pos)) continue;
+        if (slotFocus_ == i) activateFocusedSlot();    // 先点选中，再点一次 = 执行
+        else slotFocus_ = i;
+        return;
+    }
+    const auto btns = slotButtonRects();
+    if (btns[0].contains(pos)) { activateFocusedSlot(); return; }
+    if (btns[1].contains(pos)) { deleteFocusedSlot(); return; }
+    if (btns[2].contains(pos)) { pauseSlotOpen_ = false; return; }
+}
+
 void GameUI::handlePauseKey(const sf::Event::KeyEvent& k) {
     using K = sf::Keyboard;
+    // 槽位子页（含其二次确认对话框）独占键盘
+    if (slotConfirm_ != SlotConfirm::None || pauseSlotOpen_) { handleSlotKey(k); return; }
     if (pauseSettingsOpen_) {
         constexpr int N = gset::SETTING_ROW_COUNT;
         switch (k.code) {
@@ -1696,8 +1953,8 @@ void GameUI::handlePauseKey(const sf::Event::KeyEvent& k) {
         return;
     }
     switch (k.code) {
-        case K::Up: case K::W:    pauseFocus_ = (pauseFocus_ + 3) % 4; break;
-        case K::Down: case K::S:  pauseFocus_ = (pauseFocus_ + 1) % 4; break;
+        case K::Up: case K::W:    pauseFocus_ = (pauseFocus_ + 4) % 5; break;
+        case K::Down: case K::S:  pauseFocus_ = (pauseFocus_ + 1) % 5; break;
         case K::Enter: case K::Space: activatePauseItem(pauseFocus_); break;
         case K::Escape: closePausePanel(); break;
         default: break;
@@ -1705,6 +1962,8 @@ void GameUI::handlePauseKey(const sf::Event::KeyEvent& k) {
 }
 
 void GameUI::handlePauseClick(sf::Vector2f pos) {
+    // 槽位子页（含其二次确认对话框）独占鼠标
+    if (slotConfirm_ != SlotConfirm::None || pauseSlotOpen_) { handleSlotClick(pos); return; }
     if (pauseSettingsOpen_) {
         // 与启动菜单一致：先点选中，再点一次 = 激活该行
         const auto rects = pauseSettingRects();
@@ -1723,7 +1982,7 @@ void GameUI::handlePauseClick(sf::Vector2f pos) {
         return;
     }
     const auto rects = pauseMenuRects();
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         if (rects[static_cast<size_t>(i)].contains(pos)) {
             pauseFocus_ = i;
             activatePauseItem(i);
@@ -1736,8 +1995,11 @@ void GameUI::drawPausePanel(sf::RenderTarget& rt) {
     sf::RectangleShape dim({winW_, winH_});
     dim.setFillColor(sf::Color(0, 0, 0, 175));   // 全屏变暗
     rt.draw(dim);
-    if (pauseSettingsOpen_) drawPauseSettings(rt);
+    if (pauseSlotOpen_) drawPauseSlots(rt);
+    else if (pauseSettingsOpen_) drawPauseSettings(rt);
     else drawPauseMenu(rt);
+    // 覆盖 / 删除 / 读档 / 返回的二次确认永远盖在最上层
+    if (slotConfirm_ != SlotConfirm::None) drawSlotConfirm(rt);
 }
 
 void GameUI::drawPauseMenu(sf::RenderTarget& rt) {
@@ -1745,9 +2007,15 @@ void GameUI::drawPauseMenu(sf::RenderTarget& rt) {
     drawText(rt, "P A U S E D", 15, {winW_ / 2.0f, winH_ * 0.15f + 54.0f},
              UI_ACCENT_ORANGE, true);
 
-    static const char* const kItems[4] = {"继续游戏", "保存存档", "设置", "返回主界面"};
+    static const char* const kItems[5] = {"继续游戏", "保存存档", "载入存档",
+                                          "设置", "返回主界面"};
+    static const char* const kHints[5] = {"回到工地",
+                                          "手动写入指定槽位（F5）",
+                                          "从指定槽位读取（F9）",
+                                          "显示与操作选项",
+                                          "回主菜单 · 不会自动保存"};
     const auto rects = pauseMenuRects();
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         const sf::FloatRect& r = rects[static_cast<size_t>(i)];
         const bool active = (i == pauseFocus_);
         sf::RectangleShape body({r.width, r.height});
@@ -1756,12 +2024,154 @@ void GameUI::drawPauseMenu(sf::RenderTarget& rt) {
         body.setOutlineThickness(active ? 2.0f : 1.0f);
         body.setOutlineColor(active ? UI_ACCENT : UI_BORDER);
         rt.draw(body);
-        drawText(rt, kItems[i], 22,
-                 {r.left + r.width / 2.0f, r.top + r.height / 2.0f - 16.0f},
+        drawText(rt, kItems[i], 21,
+                 {r.left + r.width / 2.0f, r.top + 7.0f},
                  active ? UI_TEXT_LIGHT : UI_TEXT, true);
+        drawText(rt, kHints[i], 12,
+                 {r.left + r.width / 2.0f, r.top + 32.0f}, UI_TEXT, true);
     }
     drawText(rt, "↑↓ 选择    Enter 确认    Esc 继续游戏", 13,
              {winW_ / 2.0f, winH_ - 30.0f}, UI_TEXT, true);
+}
+
+// ---------------------------------------------------------------------
+// 存档槽位子页：2 列 × 5 行展示 10 个槽位，选中格子后按 Enter 执行
+// ---------------------------------------------------------------------
+void GameUI::drawPauseSlots(sf::RenderTarget& rt) {
+    const bool saving = (slotMode_ == SlotPanelMode::Save);
+    drawText(rt, saving ? "保存存档" : "载入存档", 40, {winW_ / 2.0f, winH_ * 0.09f},
+             UI_TEXT_LIGHT, true);
+    drawText(rt, saving ? "S A V E   G A M E" : "L O A D   G A M E", 14,
+             {winW_ / 2.0f, winH_ * 0.09f + 38.0f}, UI_ACCENT_ORANGE, true);
+    drawText(rt, saving ? "共 10 个独立槽位 · 手动保存，不会自动覆盖已有存档"
+                        : "共 10 个独立槽位 · 选择要读取的进度",
+             13, {winW_ / 2.0f, winH_ * 0.09f + 60.0f}, UI_TEXT, true);
+
+    // 右对齐小工具（GameUI::drawText 只支持居中，这里状态文字需要右对齐）
+    auto valueRight = [&](const std::string& s, float rightX, float y, sf::Color c,
+                          unsigned size) {
+        sf::Text t;
+        t.setFont(g_->assets.font());
+        t.setCharacterSize(size);
+        t.setString(sf::String::fromUtf8(s.begin(), s.end()));
+        t.setFillColor(c);
+        t.setPosition(rightX - t.getLocalBounds().width, y);
+        rt.draw(t);
+    };
+
+    const sf::Vector2i mp = sf::Mouse::getPosition(g_->window);
+    const float mx = static_cast<float>(mp.x), my = static_cast<float>(mp.y);
+    const auto tiles = slotTileRects();
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        const sf::FloatRect& r = tiles[static_cast<size_t>(i)];
+        const SaveSlotInfo& s = slotInfos_[static_cast<size_t>(i)];
+        const bool hover = r.contains(mx, my);
+        const bool lit = (i == slotFocus_) || hover;
+
+        sf::RectangleShape body({r.width, r.height});
+        body.setPosition(r.left, r.top);
+        if (s.used) body.setFillColor(lit ? sf::Color(58, 62, 70, 245)
+                                          : sf::Color(42, 45, 52, 235));
+        else        body.setFillColor(lit ? sf::Color(46, 49, 56, 235)
+                                          : sf::Color(32, 34, 40, 225));
+        body.setOutlineThickness(lit ? 2.0f : 1.0f);
+        body.setOutlineColor(lit ? UI_ACCENT
+                                 : (s.used ? sf::Color(90, 96, 106) : UI_BORDER));
+        rt.draw(body);
+
+        const std::string num = "槽位 " + std::string(i + 1 < 10 ? "0" : "") +
+                                std::to_string(i + 1);
+        drawText(rt, num, 20, {r.left + 16.0f, r.top + 10.0f},
+                 s.used ? UI_TEXT_LIGHT : UI_TEXT);
+        if (!s.used) {
+            valueRight("空槽位", r.left + r.width - 16.0f, r.top + 14.0f, UI_TEXT, 14);
+            drawText(rt, saving ? "点击 / Enter 保存到这里" : "暂无可读取的进度", 12,
+                     {r.left + 16.0f, r.top + 42.0f}, UI_TEXT);
+        } else if (s.corrupt) {
+            valueRight("损坏", r.left + r.width - 16.0f, r.top + 14.0f,
+                       sf::Color(210, 110, 90), 14);
+            drawText(rt, s.summary, 12, {r.left + 16.0f, r.top + 42.0f},
+                     sf::Color(200, 120, 100));
+        } else {
+            valueRight("已占用", r.left + r.width - 16.0f, r.top + 14.0f,
+                       sf::Color(120, 190, 130), 14);
+            drawText(rt, s.savedAt, 13, {r.left + 16.0f, r.top + 40.0f}, UI_TEXT);
+            drawText(rt, s.summary, 12, {r.left + 16.0f, r.top + 58.0f}, UI_TEXT);
+        }
+    }
+
+    // 底部按钮：主操作 / 删除 / 返回
+    const bool used = slotInfos_[static_cast<size_t>(slotFocus_)].used;
+    static const char* const kLabelsSave[3] = {"保存到该槽位", "删除该槽位", "返回"};
+    static const char* const kLabelsLoad[3] = {"读取该槽位", "删除该槽位", "返回"};
+    const char* const* labels = saving ? kLabelsSave : kLabelsLoad;
+    const bool enabled[3] = {saving || used, used, true};
+    const auto btns = slotButtonRects();
+    for (int i = 0; i < 3; ++i) {
+        const sf::FloatRect& b = btns[static_cast<size_t>(i)];
+        const bool on = enabled[i] && b.contains(mx, my);
+        sf::RectangleShape body({b.width, b.height});
+        body.setPosition(b.left, b.top);
+        body.setFillColor(!enabled[i] ? sf::Color(32, 34, 40, 200)
+                                      : (on ? sf::Color(58, 62, 70, 245)
+                                            : sf::Color(40, 43, 50, 235)));
+        body.setOutlineThickness(on ? 2.0f : 1.0f);
+        body.setOutlineColor(on ? UI_ACCENT : UI_BORDER);
+        rt.draw(body);
+        drawText(rt, labels[i], 16,
+                 {b.left + b.width / 2.0f, b.top + b.height / 2.0f - 11.0f},
+                 !enabled[i] ? sf::Color(110, 115, 125) : (on ? UI_ACCENT : UI_TEXT), true);
+    }
+    drawText(rt, "↑↓←→ 选择槽位    Enter 确认    Delete 删除    Esc 返回", 13,
+             {winW_ / 2.0f, winH_ - 30.0f}, UI_TEXT, true);
+}
+
+// ---------------------------------------------------------------------
+// 二次确认对话框（覆盖 / 删除 / 读档 / 返回主界面）
+// ---------------------------------------------------------------------
+void GameUI::drawSlotConfirm(sf::RenderTarget& rt) {
+    sf::RectangleShape dim({winW_, winH_});
+    dim.setFillColor(sf::Color(0, 0, 0, 150));
+    rt.draw(dim);
+
+    const sf::FloatRect p = slotConfirmPanelRect();
+    sf::RectangleShape panel({p.width, p.height});
+    panel.setPosition(p.left, p.top);
+    panel.setFillColor(sf::Color(38, 41, 48, 252));
+    panel.setOutlineThickness(2.0f);
+    panel.setOutlineColor(UI_ACCENT);
+    rt.draw(panel);
+
+    std::string title, okLabel;
+    std::vector<std::string> lines;
+    slotConfirmText(title, lines, okLabel);
+    drawText(rt, title, 26, {p.left + p.width / 2.0f, p.top + 18.0f}, UI_TEXT_LIGHT, true);
+    float y = p.top + 64.0f;
+    for (const auto& ln : lines) {
+        drawText(rt, ln, 14, {p.left + p.width / 2.0f, y}, UI_TEXT, true);
+        y += 24.0f;
+    }
+
+    const sf::Vector2i mp = sf::Mouse::getPosition(g_->window);
+    const float mx = static_cast<float>(mp.x), my = static_cast<float>(mp.y);
+    const auto rs = slotConfirmRects();
+    const char* const labels[2] = {okLabel.c_str(), "取消"};
+    // 覆盖 / 删除 / 返回主界面属于破坏性操作，确定键用暖色警示
+    const bool danger = (slotConfirm_ != SlotConfirm::Load);
+    const sf::Color accent = danger ? sf::Color(214, 122, 82) : UI_ACCENT;
+    for (int i = 0; i < 2; ++i) {
+        const sf::FloatRect& b = rs[static_cast<size_t>(i)];
+        const bool on = (i == slotConfirmFocus_) || b.contains(mx, my);
+        sf::RectangleShape body({b.width, b.height});
+        body.setPosition(b.left, b.top);
+        body.setFillColor(on ? sf::Color(58, 62, 70, 245) : sf::Color(32, 34, 40, 235));
+        body.setOutlineThickness(on ? 2.0f : 1.0f);
+        body.setOutlineColor(on ? (i == 0 ? accent : UI_ACCENT) : UI_BORDER);
+        rt.draw(body);
+        drawText(rt, labels[i], 16,
+                 {b.left + b.width / 2.0f, b.top + b.height / 2.0f - 11.0f},
+                 on ? (i == 0 ? accent : UI_ACCENT) : UI_TEXT, true);
+    }
 }
 
 void GameUI::drawPauseSettings(sf::RenderTarget& rt) {
@@ -1834,7 +2244,7 @@ const char* buildingHelp(cfg::BuildingType t) {
         case cfg::BuildingType::MinerVoid:     return "虚空采矿场：无需矿点，全类型矿石每秒4096个";
         case cfg::BuildingType::Furnace:       return "熔炉：矿石→锭（铁/铜/金/镍/银/铅），放置时选输出面";
         case cfg::BuildingType::Assembler:     return "组装机：右键选定配方后量产（弹药 / 电路板）";
-        case cfg::BuildingType::Generator:     return "旧版大功率发电机(2×2)：1块煤→3000EU，爆发式供电";
+        case cfg::BuildingType::Generator:     return "旧版大功率发电机：1块煤→3000EU，爆发式供电";
         case cfg::BuildingType::PowerPole:     return "电线杆：150px半径内恒导通，用于跨距离连电网";
         case cfg::BuildingType::PowerGenerator:return "燃煤发电机：烧煤稳定发电32EU/秒，需持续供煤";
         case cfg::BuildingType::Capacitor:     return "电容库：储存50000EU，平滑发电与用电的波动";
@@ -1948,7 +2358,7 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             p("全部电力以 EU/秒 计（与帧率无关）。电网无损耗、无过载——这是设计如此。");
             h("◆ 发电");
             p("燃煤发电机：烧煤稳定输出 32EU/秒，需要持续供煤（用管道送煤进去）。");
-            p("旧版大功率发电机（2×2）：1 块煤 → 3000EU，爆发式供电，适合应急。");
+            p("旧版大功率发电机：1 块煤 → 3000EU，爆发式供电，适合应急。");
             h("◆ 输电");
             p("电线杆：150px 半径内恒导通，用来跨越长距离。");
             p("电力线缆：四面独立配置，可设为 无 / 输入 / 传输 / 输出，右键逐面切换。");

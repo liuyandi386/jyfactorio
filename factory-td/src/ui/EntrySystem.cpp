@@ -26,11 +26,10 @@ namespace {
 // ---------------- 文案 ----------------
 constexpr const char* kTitleMain = "织星计划";
 constexpr const char* kTitleEn   = "W E A V E S T A R";
-constexpr const char* kVersion   = "v1.3.3  ALPHA BUILD";
+constexpr const char* kVersion   = "v1.3.4  ALPHA BUILD";
 constexpr const char* kStudio    = "JYGame 工作室";
 constexpr const char* kCompany   = "织星工业";                                   // 玩家所属公司
 constexpr const char* kTagline   = "建厂 · 清障 · 交付 · 前往下一颗星球";
-constexpr const char* kSavePath  = "saves/factory_td.json";                      // 文件名保留，兼容已有存档
 
 // ---------------- 调色板（工业暗色 + 警示橙） ----------------
 const sf::Color kBgTop(9, 13, 18);
@@ -68,28 +67,156 @@ EntrySystem::EntrySystem() {
     createWindow();
     loadFont();
 
-    // ---- 主菜单 ----
-    std::error_code ec;
-    if (std::filesystem::exists(kSavePath, ec)) {
-        hasSaveFile = true;
-        const auto bytes = std::filesystem::file_size(kSavePath, ec);
-        saveSummary = ec ? std::string("已找到存档")
-                         : (std::to_string(static_cast<double>(bytes) / 1024.0).substr(0, 4) + " KB");
-    }
-    // 主菜单：新手教程与普通关卡是两个完全独立的模式入口，平级并列、互不嵌套
+    // ---- 存档：先迁移旧版单文件存档，再扫描 10 个槽位 ----
+    migrateLegacySave();
+
+    // 主菜单：新手教程与普通关卡是两个完全独立的模式入口，平级并列、互不嵌套。
+    // 「载入存档」进入 10 槽位界面（读取 / 删除都在那里完成，且都有二次确认）；
+    // 新开一局不再弹"会覆盖存档"的确认框——手动保存模式下新局不会碰任何存档。
     menu = {
         {"新手教程", "独立的引导关卡 · 织女星带你分步上手（不影响存档）", true},
-        {"普通关卡", hasSaveFile ? "新开一局 · 不影响已有存档"
-                                 : "从零开始建造属于你的自动化产线", true},
-        {"继续游戏", hasSaveFile ? ("读取上次存档 · " + saveSummary) : "尚未发现存档", hasSaveFile},
+        {"普通关卡", "新开一局 · 手动保存（F5），不会自动覆盖任何存档", true},
+        {"载入存档", "", true},
         {"设置", "调整显示模式与交互选项", true},
         {"关于本作", "版本 / 技术栈 / 制作信息", true},
         {"退出游戏", "返回桌面", true},
     };
+    refreshSlots();   // 扫描槽位并填好主菜单第 3 项的摘要
     for (size_t i = 0; i < menu.size(); ++i)
         if (menu[i].enabled) { menuFocus = static_cast<int>(i); break; }
 
     initBackdrop();
+}
+
+// ---------------------------------------------------------------------
+// 存档槽位（载入存档）
+//
+// 手动保存 + 10 槽位：入口处只能"读取 / 删除"，创建与覆盖在游戏内完成
+// （暂停面板「保存存档」或 F5），因此这里不会主动写盘。
+// ---------------------------------------------------------------------
+void EntrySystem::refreshSlots() {
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i)
+        slotInfos[static_cast<size_t>(i)] = querySlot(i);
+    const int newest = newestSlot();
+    hasSaveFile = (newest >= 0);
+    if (hasSaveFile) {
+        const SaveSlotInfo& s = slotInfos[static_cast<size_t>(newest)];
+        saveSummary = "槽位 " + std::to_string(newest + 1) + " · " + s.savedAt;
+    } else {
+        saveSummary.clear();
+    }
+    if (menu.size() > 2) {   // 主菜单「载入存档」的提示随存档变化
+        menu[2].hint = hasSaveFile ? ("10 个独立槽位 · 最近：" + saveSummary)
+                                   : "10 个槽位都还是空的（游戏内按 F5 保存）";
+    }
+}
+
+void EntrySystem::openSlots() {
+    refreshSlots();
+    slotFocus = 0;
+    slotHover = -1;
+    // 默认把焦点放在最近一次保存的槽位上，方便直接载入
+    const int newest = newestSlot();
+    if (newest >= 0) slotFocus = newest;
+    slotNotice.clear();
+    slotNoticeTimer = 0.f;
+    state = State::Slots;
+    stateTime = 0.f;
+}
+
+void EntrySystem::closeSlots() {
+    state = State::Title;
+    stateTime = 0.f;
+}
+
+std::array<sf::FloatRect, SAVE_SLOT_COUNT> EntrySystem::slotTileRects() const {
+    const float w = static_cast<float>(window.getSize().x);
+    const float h = static_cast<float>(window.getSize().y);
+    const float gap = 12.f;
+    const float cw = std::min(400.f, (w - 120.f - gap) / 2.f);
+    const float ch = 74.f;
+    const float x0 = (w - (2.f * cw + gap)) / 2.f;
+    const float y0 = h * 0.24f;
+    std::array<sf::FloatRect, SAVE_SLOT_COUNT> r{};
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        const float col = static_cast<float>(i % 2);
+        const float row = static_cast<float>(i / 2);
+        r[static_cast<size_t>(i)] = {x0 + col * (cw + gap), y0 + row * (ch + gap), cw, ch};
+    }
+    return r;
+}
+
+std::array<sf::FloatRect, 3> EntrySystem::slotButtonRects() const {
+    const auto tiles = slotTileRects();
+    const sf::FloatRect& lastRow = tiles[static_cast<size_t>(SAVE_SLOT_COUNT - 2)];
+    const float w = static_cast<float>(window.getSize().x);
+    const float h = static_cast<float>(window.getSize().y);
+    const float bw = 200.f, bh = 42.f, gap = 18.f;
+    const float x0 = (w - (3.f * bw + 2.f * gap)) / 2.f;
+    const float y0 = std::min(lastRow.top + lastRow.height + 20.f, h - 88.f);
+    std::array<sf::FloatRect, 3> r{};
+    for (int i = 0; i < 3; ++i)
+        r[static_cast<size_t>(i)] = {x0 + static_cast<float>(i) * (bw + gap), y0, bw, bh};
+    return r;
+}
+
+void EntrySystem::activateFocusedSlot() {
+    const SaveSlotInfo& s = slotInfos[static_cast<size_t>(slotFocus)];
+    if (!s.used) {                       // 空槽位没有可读内容，给个明确提示
+        slotNotice = "槽位 " + std::string(slotFocus + 1 < 10 ? "0" : "") +
+                     std::to_string(slotFocus + 1) + " 是空的 · 在游戏内按 F5 可以保存到这里";
+        slotNoticeTimer = 3.f;
+        return;
+    }
+    chosenSlotIndex = slotFocus;
+    dialog = Dialog::ConfirmLoad;        // 载入前先确认（防止误点覆盖当前进度）
+}
+
+void EntrySystem::deleteFocusedSlot() {
+    if (!slotInfos[static_cast<size_t>(slotFocus)].used) {
+        slotNotice = "槽位 " + std::string(slotFocus + 1 < 10 ? "0" : "") +
+                     std::to_string(slotFocus + 1) + " 是空的，无需删除";
+        slotNoticeTimer = 3.f;
+        return;
+    }
+    dialog = Dialog::ConfirmDelete;      // 删除不可逆 → 必须确认
+}
+
+void EntrySystem::handleSlotsKey(const sf::Event::KeyEvent& key) {
+    using K = sf::Keyboard;
+    switch (key.code) {
+        case K::Up: case K::W:
+            slotFocus = (slotFocus + SAVE_SLOT_COUNT - 2) % SAVE_SLOT_COUNT;
+            break;
+        case K::Down: case K::S:
+            slotFocus = (slotFocus + 2) % SAVE_SLOT_COUNT;
+            break;
+        case K::Left: case K::A:
+            slotFocus = (slotFocus + SAVE_SLOT_COUNT - 1) % SAVE_SLOT_COUNT;
+            break;
+        case K::Right: case K::D:
+            slotFocus = (slotFocus + 1) % SAVE_SLOT_COUNT;
+            break;
+        case K::Enter: case K::Space: activateFocusedSlot(); break;
+        case K::Delete: deleteFocusedSlot(); break;
+        case K::Escape: closeSlots(); break;      // 返回主菜单
+        default: break;
+    }
+}
+
+void EntrySystem::handleSlotsClick(float x, float y) {
+    const sf::Vector2f m(x, y);
+    const auto tiles = slotTileRects();
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        if (!tiles[static_cast<size_t>(i)].contains(m)) continue;
+        if (slotFocus == i) activateFocusedSlot();   // 先点选中，再点一次 = 执行
+        else slotFocus = i;
+        return;
+    }
+    const auto btns = slotButtonRects();
+    if (btns[0].contains(m)) { activateFocusedSlot(); return; }   // 读取该槽位
+    if (btns[1].contains(m)) { deleteFocusedSlot(); return; }     // 删除该槽位
+    if (btns[2].contains(m)) { closeSlots(); return; }            // 返回
 }
 
 // =====================================================================
@@ -432,10 +559,13 @@ void EntrySystem::onKeyPressed(const sf::Event::KeyEvent& key) {
                 case K::Enter: case K::Space: activateMenu(menuFocus); break;
                 case K::T: activateMenu(0); break;   // 新手教程
                 case K::N: activateMenu(1); break;   // 普通关卡
-                case K::C: activateMenu(2); break;   // 继续游戏
+                case K::L: case K::C: activateMenu(2); break;   // 载入存档（C 兼容旧习惯）
                 case K::Escape: dialog = Dialog::ConfirmQuit; break;
                 default: break;
             }
+            return;
+        case State::Slots:
+            handleSlotsKey(key);
             return;
         case State::Settings:
             switch (key.code) {
@@ -475,6 +605,11 @@ void EntrySystem::onMouseClick(float x, float y) {
 
     const float w = static_cast<float>(window.getSize().x);
     const float h = static_cast<float>(window.getSize().y);
+
+    if (state == State::Slots) {
+        handleSlotsClick(x, y);
+        return;
+    }
 
     if (state == State::Title) {
         const float bw = std::min(460.f, w - 120.f);
@@ -533,6 +668,8 @@ void EntrySystem::update(float dt) {
         stateTime = 0.f;
     }
 
+    if (slotNoticeTimer > 0.f) slotNoticeTimer -= dt;   // 槽位界面内提示自动消失
+
     if (state == State::Loading) {
         advanceLoading(dt);
         if (loadReady) {
@@ -560,6 +697,7 @@ void EntrySystem::render() {
         case State::Splash:   drawSplash(); break;
         case State::Title:    drawBackdrop(); drawTitle(); break;
         case State::Settings: drawBackdrop(); drawSettings(); break;
+        case State::Slots:    drawBackdrop(); drawSlots(); break;
         case State::Loading:  drawBackdrop(); drawLoading(); break;
         case State::Finished: break;
     }
@@ -669,10 +807,107 @@ void EntrySystem::drawTitle() {
     bar.setFillColor(sf::Color(10, 13, 18, 215));
     window.draw(bar);
     drawText(std::string(kVersion) + "   |   " +
-                 (hasSaveFile ? ("存档 " + saveSummary) : "未发现存档"),
+                 (hasSaveFile ? ("最近存档 " + saveSummary) : "10 个槽位均为空"),
              16.f, h - 17.f, 13, kTextDim, 0);
-    drawText("↑↓ 选择    Enter 确认    T 教程    N 普通关卡    Esc 退出",
+    drawText("↑↓ 选择    Enter 确认    T 教程    N 普通关卡    L 载入存档    Esc 退出",
              w - 16.f, h - 17.f, 13, kTextDim, 2);
+}
+
+// ---------------------------------------------------------------------
+// 存档槽位界面（WorldBox 式 10 个独立槽位）
+// ---------------------------------------------------------------------
+void EntrySystem::drawSlots() {
+    const float w = static_cast<float>(window.getSize().x);
+    const float h = static_cast<float>(window.getSize().y);
+    const float intro = clamp01(stateTime / 0.35f);
+
+    drawText("载入存档", w / 2.f, h * 0.135f, 40,
+             sf::Color(240, 246, 252, static_cast<sf::Uint8>(255 * intro)), 1, true);
+    drawText("L O A D   G A M E", w / 2.f, h * 0.135f + 34.f, 14,
+             sf::Color(255, 152, 0, static_cast<sf::Uint8>(200 * intro)), 1);
+    drawText("共 10 个独立槽位 · 手动保存：只有主动保存过的进度才会留在这里",
+             w / 2.f, h * 0.135f + 58.f, 13, kTextDim, 1);
+
+    const sf::Vector2f mp = mousePos();
+    const bool mouseMoved = !mousePosValid || mp.x != lastMousePos.x || mp.y != lastMousePos.y;
+    lastMousePos = mp;
+    mousePosValid = true;
+
+    const auto tiles = slotTileRects();
+    slotHover = -1;
+    for (int i = 0; i < SAVE_SLOT_COUNT; ++i) {
+        const sf::FloatRect& r = tiles[static_cast<size_t>(i)];
+        const SaveSlotInfo& s = slotInfos[static_cast<size_t>(i)];
+        if (r.contains(mp)) {
+            slotHover = i;
+            if (mouseMoved) slotFocus = i;   // 悬停即选中（停住不抢键盘焦点）
+        }
+        const bool lit = (i == slotFocus) || (i == slotHover);
+
+        sf::RectangleShape body({r.width, r.height});
+        body.setPosition(r.left, r.top);
+        if (s.used) body.setFillColor(lit ? sf::Color(38, 44, 52, 246) : kPanel);
+        else        body.setFillColor(lit ? sf::Color(30, 35, 42, 236)
+                                          : sf::Color(18, 22, 28, 220));
+        body.setOutlineThickness(lit ? 2.f : 1.f);
+        body.setOutlineColor(lit ? kAccent : (s.used ? kPanelEdge : sf::Color(50, 58, 68)));
+        window.draw(body);
+
+        const std::string num = "槽位 " + std::string(i + 1 < 10 ? "0" : "") +
+                                std::to_string(i + 1);
+        drawText(num, r.left + 16.f, r.top + 12.f, 20, s.used ? kText : kTextDim, 0);
+        const float rightX = r.left + r.width - 16.f;
+        auto valueRight = [&](const std::string& s2, float y, unsigned size, sf::Color c) {
+            sf::Text t;
+            t.setFont(font);
+            t.setCharacterSize(size);
+            t.setString(u8(s2));
+            t.setFillColor(c);
+            t.setPosition(rightX - t.getLocalBounds().width, y);
+            window.draw(t);
+        };
+        if (!s.used) {
+            valueRight("空槽位", r.top + 16.f, 14, kDisabled);
+            drawText("暂无进度 · 游戏内按 F5 可保存到这里", r.left + 16.f, r.top + 44.f,
+                     12, kTextDim, 0);
+        } else if (s.corrupt) {
+            valueRight("损坏", r.top + 16.f, 14, sf::Color(214, 110, 90));
+            drawText("存档文件无法解析 · 可删除后重新保存", r.left + 16.f, r.top + 44.f,
+                     12, sf::Color(200, 120, 100), 0);
+        } else {
+            valueRight("已占用", r.top + 16.f, 14, sf::Color(120, 200, 140));
+            drawText(s.savedAt, r.left + 16.f, r.top + 40.f, 13, kText, 0);
+            drawText(s.summary, r.left + 16.f, r.top + 58.f, 12, kTextDim, 0);
+        }
+    }
+
+    // ---- 底部按钮：读取 / 删除 / 返回 ----
+    const bool used = slotInfos[static_cast<size_t>(slotFocus)].used;
+    static const char* const kLabels[3] = {"读取该槽位", "删除该槽位", "返回"};
+    const bool enabled[3] = {used, used, true};
+    const auto btns = slotButtonRects();
+    for (int i = 0; i < 3; ++i) {
+        const sf::FloatRect& b = btns[static_cast<size_t>(i)];
+        const bool on = enabled[i] && b.contains(mp);
+        sf::RectangleShape body({b.width, b.height});
+        body.setPosition(b.left, b.top);
+        body.setFillColor(!enabled[i] ? sf::Color(20, 24, 30, 200)
+                                      : (on ? sf::Color(38, 44, 52, 246) : kPanel));
+        body.setOutlineThickness(on ? 2.f : 1.f);
+        body.setOutlineColor(on ? kAccent : kPanelEdge);
+        window.draw(body);
+        drawText(kLabels[i], b.left + b.width / 2.f, b.top + b.height / 2.f - 11.f, 16,
+                 !enabled[i] ? kDisabled : (on ? kAccent : kText), 1);
+    }
+
+    // ---- 提示行 ----
+    if (slotNoticeTimer > 0.f && !slotNotice.empty()) {
+        drawText(slotNotice, w / 2.f, h - 74.f, 14,
+                 sf::Color(255, 152, 0, static_cast<sf::Uint8>(200 * clamp01(slotNoticeTimer))),
+                 1);
+    }
+    drawText("↑↓←→ 选择槽位    Enter 读取    Delete 删除    Esc 返回",
+             w / 2.f, h - 34.f, 13, kTextDim, 1);
 }
 
 // ---------------------------------------------------------------------
@@ -868,10 +1103,11 @@ int EntrySystem::dialogOptionCount() const {
 
 std::string EntrySystem::dialogOptionLabel(int i) const {
     switch (dialog) {
-        case Dialog::About:          return "关闭";
-        case Dialog::ConfirmNewGame: return i == 0 ? "开始普通关卡" : "返回";
-        case Dialog::ConfirmQuit:    return i == 0 ? "退出游戏" : "取消";
-        default:                     return "";
+        case Dialog::About:         return "关闭";
+        case Dialog::ConfirmLoad:   return i == 0 ? "读取并进入" : "取消";
+        case Dialog::ConfirmDelete: return i == 0 ? "删除存档" : "取消";
+        case Dialog::ConfirmQuit:   return i == 0 ? "退出游戏" : "取消";
+        default:                    return "";
     }
 }
 
@@ -887,9 +1123,23 @@ sf::FloatRect EntrySystem::dialogOptionRect(int i) const {
 
 void EntrySystem::activateDialogOption(int i) {
     if (dialog == Dialog::About) { dialog = Dialog::None; return; }
-    if (dialog == Dialog::ConfirmNewGame) {
+    if (dialog == Dialog::ConfirmLoad) {
         dialog = Dialog::None;
-        if (i == 0) beginLoading(EntryAction::NewGame);
+        // 选中槽位在 activateFocusedSlot() 里已记入 chosenSlotIndex
+        if (i == 0 && chosenSlotIndex >= 0) beginLoading(EntryAction::Continue);
+        return;
+    }
+    if (dialog == Dialog::ConfirmDelete) {
+        dialog = Dialog::None;
+        if (i == 0) {
+            const int slot = slotFocus;
+            if (deleteSlot(slot)) {
+                slotNotice = "已删除槽位 " + std::string(slot + 1 < 10 ? "0" : "") +
+                             std::to_string(slot + 1) + " 号存档";
+                slotNoticeTimer = 3.f;
+            }
+            refreshSlots();
+        }
         return;
     }
     if (dialog == Dialog::ConfirmQuit) {
@@ -920,21 +1170,32 @@ void EntrySystem::drawDialog() {
 
     std::string title;
     std::vector<std::string> lines;
-    if (dialog == Dialog::ConfirmNewGame) {
-        title = "开始普通关卡";
-        lines = {"检测到已有存档文件。",
-                 "普通关卡将从零开始，旧存档在按 F5 保存前不会被覆盖。",
-                 "确定要开始普通关卡吗？"};
+    const int slot = std::max(0, std::min(slotFocus, SAVE_SLOT_COUNT - 1));
+    const SaveSlotInfo& info = slotInfos[static_cast<size_t>(slot)];
+    const std::string num = "槽位 " + std::string(slot + 1 < 10 ? "0" : "") +
+                            std::to_string(slot + 1);
+    if (dialog == Dialog::ConfirmLoad) {
+        title = "载入存档";
+        lines = {"将读取 " + num + "（" + info.savedAt + " · " + info.summary + "）。",
+                 "该槽位存档不会被修改，之后仍可继续保存。",
+                 "确定要载入并进入游戏吗？"};
+    } else if (dialog == Dialog::ConfirmDelete) {
+        title = "删除存档";
+        lines = {num + " 的存档将被永久删除（" + info.savedAt + "）。",
+                 "删除后无法找回。",
+                 "确定要删除吗？"};
     } else if (dialog == Dialog::ConfirmQuit) {
         title = "退出游戏";
-        lines = {"确定要退出《织星计划》吗？", "游戏内随时可按 F5 保存进度。"};
+        lines = {"确定要退出《织星计划》吗？",
+                 "本作采用手动保存：未主动保存的进度不会留下。",
+                 "游戏内按 F5 可选择槽位保存进度。"};
     } else {
         title = "关于本作";
         lines = {"织星计划  ·  " + std::string(kVersion),
                  std::string("身份: ") + kCompany + "外派工程师    随船 AI: 织女星",
                  "玩法: 建厂 → 清障 → 交付指标 → 前往下一颗星球",
                  "技术栈: C++20 / SFML 2.6 / EnTT (ECS 架构)",
-                 "存档: saves/        设置: saves/settings.json",
+                 "存档: saves/slot_01..10.json（手动保存 · 10 槽位）",
                  "制作: " + std::string(kStudio)};
     }
 
@@ -974,7 +1235,7 @@ void EntrySystem::activateMenu(int index) {
     switch (index) {
         case 0: requestStart(EntryAction::Tutorial); break;   // 新手教程（独立模式）
         case 1: requestStart(EntryAction::NewGame); break;    // 普通关卡（独立模式）
-        case 2: requestStart(EntryAction::Continue); break;
+        case 2: openSlots(); break;                           // 载入存档 → 10 槽位界面
         case 3: openSettings(); break;
         case 4: dialog = Dialog::About; break;
         case 5: dialog = Dialog::ConfirmQuit; break;
@@ -1020,21 +1281,15 @@ void EntrySystem::activateSettingRow(int row) {
 }
 
 void EntrySystem::requestStart(EntryAction action) {
+    // 载入存档：必须先在槽位界面选中一个有效槽位（chosenSlotIndex 由 activateFocusedSlot 记录）
     if (action == EntryAction::Continue) {
-        if (!hasSaveFile) return;         // 无存档时该项不可用
+        if (chosenSlotIndex < 0 ||
+            !slotInfos[static_cast<size_t>(chosenSlotIndex)].used) return;
         beginLoading(action);
         return;
     }
-    // 新手教程是完全独立的模式：直接进入，不校验、不触碰主存档
-    if (action == EntryAction::Tutorial) {
-        beginLoading(action);
-        return;
-    }
-    // 普通关卡 · 新游戏：已有存档时先确认（避免玩家误以为进度丢失）
-    if (hasSaveFile) {
-        dialog = Dialog::ConfirmNewGame;
-        return;
-    }
+    // 新手教程是完全独立的模式：直接进入，不校验、不触碰任何存档
+    // 普通关卡 · 新游戏：手动保存模式下新局不会写盘/覆盖任何槽位，因此无需确认
     beginLoading(action);
 }
 
@@ -1071,11 +1326,9 @@ void EntrySystem::advanceLoading(float dt) {
                 case 0:   // 读取数值配置（覆盖塔/敌人/配方/成本）
                     cfg::loadConfig("assets/config.json");
                     break;
-                case 1: { // 校验存档是否真实存在
-                    std::error_code ec;
-                    hasSaveFile = std::filesystem::exists(kSavePath, ec);
+                case 1:   // 扫描 10 个槽位（只读取状态，不写盘），供主菜单展示
+                    refreshSlots();
                     break;
-                }
                 case 2:   // 展开敌人折线路径（与 Game::generateTerrain 同一算法）
                     previewPath = buildPathTiles(cfg::PATH_POINTS, cfg::GRID_WIDTH,
                                                  cfg::GRID_HEIGHT);

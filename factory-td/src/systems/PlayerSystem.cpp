@@ -11,7 +11,7 @@
 #include "utils/Profiler.h"
 
 namespace {
-/// 世界坐标是否落在建筑矩形内（含2×2占地）
+/// 世界坐标是否落在建筑矩形内（按 b.w/b.h 占地）
 bool hitBuilding(const Game& g, entt::entity e, sf::Vector2f world) {
     const auto& b = g.reg.get<Building>(e);
     const float x0 = b.pos.x * cfg::TILE_SIZE;
@@ -99,8 +99,8 @@ static void handleKey(Game& g, const sf::Event::KeyEvent& key) {
         case K::M: g.ui->toggleWorldMap(); break;           // M打开/关闭世界地图
         case K::H: g.ui->toggleHelp(); break;               // H打开/关闭说明书(新手引导)
         case K::F1: g.ui->toggleHelp(); break;              // F1同H（帮助键惯例）
-        case K::F5: g.saveGame(); break;                    // F5保存
-        case K::F9: g.loadGame(); break;                    // F9读档
+        case K::F5: g.ui->openSlotPanel(GameUI::SlotPanelMode::Save); break;  // F5打开保存槽位
+        case K::F9: g.ui->openSlotPanel(GameUI::SlotPanelMode::Load); break;  // F9打开读档槽位
         case K::Delete: g.deleteAtCursor(); break;          // DEL拆除并返还材料
         case K::Escape: {
             // 有面板/编辑器打开 → 先关掉（MC 习惯）；什么都没有 → 打开暂停面板

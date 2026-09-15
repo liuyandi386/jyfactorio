@@ -360,50 +360,53 @@ void PipeSystem::updateMachinePulls(Game& g) {
             if (inv.totalItems + reserve >= inv.maxSlots * inv.maxStackSize) continue;
         }
 
-        // 从四邻管道/分流器/通物接口各取至多1件所需原料（仅从 INPUT 面）
+        // 从 INPUT 面的相邻管道/分流器/通物接口各取至多1件所需原料
+        // 建筑占地的每个面可能并排多格，必须逐格查询占位
         int pulled = 0;
         for (int d = 0; d < 4 && pulled < 4; ++d) {
             if (fc.get(d) != cfg::FaceMode::INPUT) continue;   // 输出/无连接面不拉料
-            const entt::entity nb = neighborAt(g, b.pos.x + cfg::Dir::OFFSETS[d][0],
-                                               b.pos.y + cfg::Dir::OFFSETS[d][1]);
-            if (nb == entt::null || !g.reg.valid(nb)) continue;
-            if (g.reg.all_of<Pipe>(nb)) {
-                auto& pbuf = g.reg.get<Pipe>(nb).buffer;
-                for (auto it = pbuf.begin(); it != pbuf.end(); ++it) {
-                    if (std::find(wanted.begin(), wanted.end(), *it) == wanted.end())
-                        continue;
-                    if (inv.add(*it, 1) > 0) {
-                        pbuf.erase(it);
-                        pulled++;
-                        break;
+            const FaceTiles ft = faceNeighborTiles(b, d);
+            for (int fi = 0; fi < ft.count && pulled < 4; ++fi) {
+                const entt::entity nb = neighborAt(g, ft.t[fi].x, ft.t[fi].y);
+                if (nb == entt::null || !g.reg.valid(nb)) continue;
+                if (g.reg.all_of<Pipe>(nb)) {
+                    auto& pbuf = g.reg.get<Pipe>(nb).buffer;
+                    for (auto it = pbuf.begin(); it != pbuf.end(); ++it) {
+                        if (std::find(wanted.begin(), wanted.end(), *it) == wanted.end())
+                            continue;
+                        if (inv.add(*it, 1) > 0) {
+                            pbuf.erase(it);
+                            pulled++;
+                            break;
+                        }
                     }
-                }
-            } else if (g.reg.all_of<SplitterQueue>(nb)) {
-                auto& sp = g.reg.get<SplitterQueue>(nb);
-                if (sp.queue.empty()) continue;
-                const cfg::ItemType front = sp.queue.front();
-                if (std::find(wanted.begin(), wanted.end(), front) != wanted.end() &&
-                    inv.add(front, 1) > 0) {
-                    sp.queue.pop_front();
-                    pulled++;
-                }
-            } else if (g.reg.all_of<MeInterface>(nb)) {
-                // 通物接口：从所属网络取料（全网共享库存），并遵循接口输出过滤
-                const auto& iface = g.reg.get<MeInterface>(nb);
-                const int nid = iface.networkId;
-                if (nid < 0 || nid >= static_cast<int>(MeSystem::networks().size()))
-                    continue;
-                MeNetwork& net = MeSystem::networksMutable()[static_cast<size_t>(nid)];
-                for (auto t : wanted) {
-                    // 接口过滤白名单：非空时仅允许锁定的物品被拉出
-                    if (!iface.filter.empty() &&
-                        std::find(iface.filter.begin(), iface.filter.end(), t) == iface.filter.end())
-                        continue;
-                    if (MeSystem::countItem(net, t) <= 0) continue;
-                    if (inv.add(t, 1) > 0) {
-                        MeSystem::removeItem(net, t, 1);
+                } else if (g.reg.all_of<SplitterQueue>(nb)) {
+                    auto& sp = g.reg.get<SplitterQueue>(nb);
+                    if (sp.queue.empty()) continue;
+                    const cfg::ItemType front = sp.queue.front();
+                    if (std::find(wanted.begin(), wanted.end(), front) != wanted.end() &&
+                        inv.add(front, 1) > 0) {
+                        sp.queue.pop_front();
                         pulled++;
-                        break;
+                    }
+                } else if (g.reg.all_of<MeInterface>(nb)) {
+                    // 通物接口：从所属网络取料（全网共享库存），并遵循接口输出过滤
+                    const auto& iface = g.reg.get<MeInterface>(nb);
+                    const int nid = iface.networkId;
+                    if (nid < 0 || nid >= static_cast<int>(MeSystem::networks().size()))
+                        continue;
+                    MeNetwork& net = MeSystem::networksMutable()[static_cast<size_t>(nid)];
+                    for (auto t : wanted) {
+                        // 接口过滤白名单：非空时仅允许锁定的物品被拉出
+                        if (!iface.filter.empty() &&
+                            std::find(iface.filter.begin(), iface.filter.end(), t) == iface.filter.end())
+                            continue;
+                        if (MeSystem::countItem(net, t) <= 0) continue;
+                        if (inv.add(t, 1) > 0) {
+                            MeSystem::removeItem(net, t, 1);
+                            pulled++;
+                            break;
+                        }
                     }
                 }
             }
@@ -411,37 +414,43 @@ void PipeSystem::updateMachinePulls(Game& g) {
     }
 
     // ---- 发电机：从相邻管道/通物接口拉煤 ----
+    // 逐格遍历四个面的外侧相邻格（统一走 faceNeighborTiles，兼容任意占地）。
     auto gview = g.reg.view<Building, PowerGeneratorNode, Inventory>();
     for (auto [e, b, gen, inv] : gview.each()) {
         if (inv.isFull()) continue;
-        for (int d = 0; d < 4; ++d) {
-            const entt::entity nb = neighborAt(g, b.pos.x + cfg::Dir::OFFSETS[d][0],
-                                               b.pos.y + cfg::Dir::OFFSETS[d][1]);
-            if (nb == entt::null || !g.reg.valid(nb)) continue;
-            if (g.reg.all_of<Pipe>(nb)) {
-                auto& pbuf = g.reg.get<Pipe>(nb).buffer;
-                for (auto it = pbuf.begin(); it != pbuf.end(); ++it) {
-                    if (*it != cfg::ItemType::Coal) continue;
-                    if (inv.add(cfg::ItemType::Coal, 1) > 0) {
-                        pbuf.erase(it);
+        bool got = false;   // 每帧每台发电机至多补 1 煤（与原行为一致）
+        for (int d = 0; d < 4 && !got; ++d) {
+            const FaceTiles ft = faceNeighborTiles(b, d);
+            for (int fi = 0; fi < ft.count && !got; ++fi) {
+                const entt::entity nb = neighborAt(g, ft.t[fi].x, ft.t[fi].y);
+                if (nb == entt::null || !g.reg.valid(nb)) continue;
+                if (g.reg.all_of<Pipe>(nb)) {
+                    auto& pbuf = g.reg.get<Pipe>(nb).buffer;
+                    for (auto it = pbuf.begin(); it != pbuf.end(); ++it) {
+                        if (*it != cfg::ItemType::Coal) continue;
+                        if (inv.add(cfg::ItemType::Coal, 1) > 0) {
+                            pbuf.erase(it);
+                            got = true;
+                            break;
+                        }
+                    }
+                } else if (g.reg.all_of<MeInterface>(nb)) {
+                    const auto& iface = g.reg.get<MeInterface>(nb);
+                    const int nid = iface.networkId;
+                    if (nid < 0 || nid >= static_cast<int>(MeSystem::networks().size()))
+                        continue;
+                    // 接口过滤白名单：锁定非煤矿时不允许煤被拉出
+                    if (!iface.filter.empty() &&
+                        std::find(iface.filter.begin(), iface.filter.end(), cfg::ItemType::Coal) ==
+                            iface.filter.end())
+                        continue;
+                    MeNetwork& net = MeSystem::networksMutable()[static_cast<size_t>(nid)];
+                    if (MeSystem::countItem(net, cfg::ItemType::Coal) > 0 &&
+                        inv.add(cfg::ItemType::Coal, 1) > 0) {
+                        MeSystem::removeItem(net, cfg::ItemType::Coal, 1);
+                        got = true;
                         break;
                     }
-                }
-            } else if (g.reg.all_of<MeInterface>(nb)) {
-                const auto& iface = g.reg.get<MeInterface>(nb);
-                const int nid = iface.networkId;
-                if (nid < 0 || nid >= static_cast<int>(MeSystem::networks().size()))
-                    continue;
-                // 接口过滤白名单：锁定非煤矿时不允许煤被拉出
-                if (!iface.filter.empty() &&
-                    std::find(iface.filter.begin(), iface.filter.end(), cfg::ItemType::Coal) ==
-                        iface.filter.end())
-                    continue;
-                MeNetwork& net = MeSystem::networksMutable()[static_cast<size_t>(nid)];
-                if (MeSystem::countItem(net, cfg::ItemType::Coal) > 0 &&
-                    inv.add(cfg::ItemType::Coal, 1) > 0) {
-                    MeSystem::removeItem(net, cfg::ItemType::Coal, 1);
-                    break;
                 }
             }
         }

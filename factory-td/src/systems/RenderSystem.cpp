@@ -43,7 +43,7 @@ bool onScreen(const Game& g, sf::Vector2f p, float margin = cfg::TILE_SIZE) {
 }
 
 /// 把贴图按"一格大小"绘制（纹理分辨率无关：32/64/90px贴图都归一化到
-/// TILE_SIZE×zoom；wMul/hMul 用于2×2占地建筑）
+/// TILE_SIZE×zoom；wMul/hMul 用于多格占地建筑——当前建筑全部 1×1，均为 1）
 void drawGridSprite(sf::RenderTarget& rt, const sf::Texture& tex, sf::Vector2f topLeft,
                     float zoom, int wMul = 1, int hMul = 1) {
     const auto ts = tex.getSize();
@@ -178,7 +178,7 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
             default:
                 continue;   // 其他类型在其他层绘制
         }
-        // 按实际纹理尺寸归一化到占地大小（2×2发电机 → wMul/hMul=2）
+        // 按实际纹理尺寸归一化到占地大小（b.w/b.h，当前全部 1×1）
         drawGridSprite(rt, *tex, sc, z, b.w, b.h);
 
         // ---- 附加指示 ----
@@ -270,8 +270,10 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
             }
         } else if (b.type == cfg::BuildingType::Generator) {
             const auto& gen = g.reg.get<PowerGeneratorNode>(e);
+            // 状态灯放在整块占地中心
             sf::CircleShape dot(4.0f * z);
-            dot.setPosition(sc.x + 4.0f * z, sc.y + 4.0f * z);
+            dot.setPosition(sc.x + b.w * cfg::TILE_SIZE * z / 2.0f - 4.0f * z,
+                            sc.y + b.h * cfg::TILE_SIZE * z / 2.0f - 4.0f * z);
             dot.setFillColor(gen.running ? sf::Color(255, 255, 0) : sf::Color(255, 0, 0));
             rt.draw(dot);
         } else if (b.type == cfg::BuildingType::Capacitor) {
@@ -759,17 +761,18 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
 
     // ================= 11. 放置预览 =================
     if (g.hasSelection) {
-        const auto& info = cfg::BUILDING_INFOS[static_cast<size_t>(g.selected)];
-        (void)info;
+        // 预览按真实占地绘制，与 canPlace 的判定范围一致（当前全部 1×1）
+        const auto bs = cfg::buildingSize(g.selected);
         const sf::Vector2f sc = g.worldToScreen(g.previewTile.x * cfg::TILE_SIZE,
                                                 g.previewTile.y * cfg::TILE_SIZE);
         const float s = cfg::TILE_SIZE * z;
-        sf::RectangleShape rect({s, s});
+        const sf::Vector2f fp{s * static_cast<float>(bs.w), s * static_cast<float>(bs.h)};
+        sf::RectangleShape rect(fp);
         rect.setPosition(sc.x, sc.y);
         rect.setFillColor(g.previewCanBuild ? sf::Color(0, 255, 0, 128)
                                             : sf::Color(255, 0, 0, 128));
         rt.draw(rect);
-        sf::RectangleShape border({s, s});
+        sf::RectangleShape border(fp);
         border.setPosition(sc.x, sc.y);
         border.setFillColor(sf::Color::Transparent);
         border.setOutlineColor(sf::Color::White);

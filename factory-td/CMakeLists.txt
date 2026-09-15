@@ -120,6 +120,13 @@ target_link_libraries(factory-td PRIVATE
     Threads::Threads
 )
 
+# Windows：游戏没有任何文本输入，需要主动禁用窗口的输入法（ImmAssociateContext /
+# ImmDisableIME）。否则微软拼音等中文输入法的候选窗/语言栏会与"无边框全屏 + 置顶"
+# 窗口反复争夺 Z 序与前台焦点，表现为切到中文后持续闪屏/黑屏。
+if(WIN32)
+    target_link_libraries(factory-td PRIVATE imm32)
+endif()
+
 # ---------- std::execution::par 后端 ----------
 # MSVC 自带并行算法支持；GCC 需要 TBB。
 # 找不到 TBB 时定义 FT_NO_PAR，代码自动退化为串行（见 utils/Profiler.h）。

@@ -169,11 +169,10 @@ bool Game::isOccupied(int tx, int ty) const {
 }
 
 bool Game::canPlace(int tx, int ty, cfg::BuildingType t) const {
-    // 占地：旧版发电机2×2，其余1×1
-    const int w = (t == cfg::BuildingType::Generator) ? 2 : 1;
-    const int h = (t == cfg::BuildingType::Generator) ? 2 : 1;
-    for (int dy = 0; dy < h; ++dy)
-        for (int dx = 0; dx < w; ++dx) {
+    // 占地尺寸统一取自 cfg::BUILDING_INFOS（当前全部 1×1）
+    const auto bs = cfg::buildingSize(t);
+    for (int dy = 0; dy < bs.h; ++dy)
+        for (int dx = 0; dx < bs.w; ++dx) {
             const int x = tx + dx, y = ty + dy;
             if (!grid.inBounds(x, y)) return false;
             // 地形检查：所有建筑要求草地（管道可铺在任意地形）
@@ -202,6 +201,10 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
     b.type = t;
     b.pos = {tx, ty};
     b.dir = dir % 4;
+    // 占地尺寸统一取自 cfg::BUILDING_INFOS（当前全部 1×1）
+    const auto bs = cfg::buildingSize(t);
+    b.w = bs.w;
+    b.h = bs.h;
 
     switch (t) {
         case cfg::BuildingType::TowerBasic:
@@ -290,9 +293,7 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
             break;
         }
         case cfg::BuildingType::Generator: {
-            // 旧版大功率燃煤发电机（2×2，1煤→3000EU/3秒）
-            b.w = 2;
-            b.h = 2;
+            // 旧版大功率燃煤发电机（1煤→3000EU/3秒）
             auto& gen = reg.emplace<PowerGeneratorNode>(e);
             gen.legacyMode = true;
             gen.burnTotal = cfg::LEGACY_GEN_BURN_TIME;
@@ -529,30 +530,38 @@ void Game::cycleBuilding() {
 void Game::spawnEnemy() { EnemySystem::spawnEnemy(*this); }
 
 // ---------------------------------------------------------------------
-// 存档
+// 存档（手动保存 · 10 个独立槽位）
+//
+// 设计参考《世界盒子》：没有任何"自动保存"路径——只有玩家在暂停面板
+// 点「保存存档」或按 F5 才会写盘，读取则只发生在玩家明确选择槽位时。
+// 因此「新开一局 → 直接关窗」不会覆盖任何已有存档。
 // ---------------------------------------------------------------------
-void Game::saveGame() {
-    // 教程是独立模式、独立进度（saves/tutorial.json），不写主存档：
-    // 避免教学过程中的临时建造覆盖玩家的普通关卡存档。
+bool Game::saveToSlot(int slot) {
+    // 教程是独立模式、独立进度（saves/tutorial.json），不写槽位：
+    // 避免教学过程中的临时建造占用玩家的存档槽。
     if (mode == GameMode::Tutorial) {
         ui->showToast("新手教程模式不保存进度");
-        return;
+        return false;
     }
-    ui->showToast(::saveGame(*this) ? "保存成功!" : "保存失败!");
+    const bool ok = ::saveGameToSlot(*this, slot);
+    if (ok) ui->showToast("已保存到槽位 " + std::to_string(slot + 1) + " 号");
+    else    ui->showToast("保存失败!");
+    return ok;
 }
 
-void Game::loadGame() {
+bool Game::loadFromSlot(int slot) {
     if (mode == GameMode::Tutorial) {
         ui->showToast("新手教程模式不读取存档");
-        return;
+        return false;
     }
-    if (::loadGame(*this)) {
+    if (::loadGameFromSlot(*this, slot)) {
         // 普通关卡不承载引导状态（教程是独立模式；旧档可能残留 active 标记）
         tutorial = tutorial::State{};
-        ui->showToast("加载成功!");
-    } else {
-        ui->showToast("没有存档!");
+        ui->showToast("已读取槽位 " + std::to_string(slot + 1) + " 号");
+        return true;
     }
+    ui->showToast("该槽位没有存档或存档已损坏");
+    return false;
 }
 
 // ---------------------------------------------------------------------
@@ -886,6 +895,13 @@ void Game::processEvents() {
             camera.setScreenSize(w, h);
             window.setView(sf::View(sf::FloatRect(0.0f, 0.0f, w, h)));
             ui->updateLayout();
+            continue;
+        }
+
+        // 失焦（输入法候选窗/其它窗口抢焦点时同样会触发）：立刻松开全部按键。
+        // 否则 W/A/S/D 会卡在按下状态，摄像机与放置预览持续漂移（看起来像"鼠标自己乱滑"）。
+        if (event.type == sf::Event::LostFocus) {
+            keys.fill(false);
             continue;
         }
 

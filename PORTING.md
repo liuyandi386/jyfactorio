@@ -22,7 +22,7 @@
 | `entities/Bullet.py` | `components/Bullet.h` + `TurretSystem.cpp` | 追踪、ease-out、<12px命中、拖尾 |
 | `entities/OreDeposit.py` | `components/Storage.h`(OreDeposit) | 8种矿石独立随机分布；v1.2.0 曾改为有限储量，v1.3.3 起默认**无限开采**（`ore_infinite`，置 `false` 恢复每矿点1000、采尽消失） |
 | `entities/Bucket.py` | `components/Storage.h`(Bucket) + `MachineSystem.cpp` | FIFO、0.5s输出间隔、容量99999 |
-| `entities/Generator.py`（旧发电机） | `components/Power.h`(PowerGeneratorNode legacyMode) + `PowerSystem.cpp` | 2×2占地、1煤→3000EU/3s；并入统一EU电网 |
+| `entities/Generator.py`（旧发电机） | `components/Power.h`(PowerGeneratorNode legacyMode) + `PowerSystem.cpp` | 1煤→3000EU/3s；并入统一EU电网（原版 2×2 占地已统一修正为 1×1） |
 | `entities/PowerPole.py` | `components/Power.h`(PowerPole) + `PowerSystem.cpp` | 150px半径连接；并入统一EU电网（真正参与供电） |
 | `entities/AmmoFactory.py`（弹药制造机） | **删除** → `MachineKind::Assembler`（MachineSystem.cpp） | 按需求删除，改用组装机；贴图复用原 `machine_ammo_factory_*.png` |
 | `entities/Splitter.py` | `components/Storage.h`(SplitterQueue) + `PipeSystem.cpp` | v1.2.0 重写：自动链接四邻、智能轮询均分（满出口跳过），不再需要面配置 |

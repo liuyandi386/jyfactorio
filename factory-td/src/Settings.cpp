@@ -244,6 +244,54 @@ SettingActivate activateSettingRow(int row) {
     return SettingActivate::None;
 }
 
+#ifdef _WIN32
+namespace {
+
+HWND    g_imeHwnd     = nullptr;   // 已接管输入法的窗口（重建窗口后会更新）
+WNDPROC g_imePrevProc = nullptr;   // SFML 原本的窗口过程
+
+// 挂接在窗口过程最外层：吞掉全部输入法消息。
+// 微软拼音（Win10/11）走 TSF，即使不产生 IMM32 的候选窗，也会在被视为"编辑焦点"的
+// 窗口上弹出合成窗/候选框/语言栏。而本工程全屏是"无边框窗口 + HWND_TOPMOST"，
+// 两个置顶窗口反复互抢 Z 序与前台焦点 → 整窗反复重绘 → 玩家看到的持续闪屏/黑屏，
+// 且连带鼠标坐标相对窗口跳变（放置预览/摄像机乱动）。游戏无任何文本输入，直接吞掉即可。
+LRESULT CALLBACK imeSuppressProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        // 只清掉"显示合成窗"标志位，消息继续下发（不能整条丢弃，否则输入法状态会错乱）
+        case WM_IME_SETCONTEXT:
+            return g_imePrevProc
+                ? ::CallWindowProcW(g_imePrevProc, hwnd, msg, wp,
+                                    lp & ~static_cast<LPARAM>(ISC_SHOWUICOMPOSITIONWINDOW))
+                : ::DefWindowProcW(hwnd, msg, wp, lp);
+        case WM_IME_STARTCOMPOSITION:
+        case WM_IME_COMPOSITION:
+        case WM_IME_ENDCOMPOSITION:
+        case WM_IME_NOTIFY:
+        case WM_IME_CHAR:
+        case WM_IME_REQUEST:
+            return 0;   // 直接吞掉：不弹候选窗、不弹语言栏、不改变窗口焦点
+        default:
+            break;
+    }
+    return g_imePrevProc ? ::CallWindowProcW(g_imePrevProc, hwnd, msg, wp, lp)
+                         : ::DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+/// 关闭该窗口的输入法（三重保险覆盖 IMM32 与 TSF 两条路径）
+void suppressImeForWindow(sf::RenderWindow& window) {
+    const HWND hwnd = static_cast<HWND>(window.getSystemHandle());
+    if (!hwnd || hwnd == g_imeHwnd) return;
+
+    ::ImmAssociateContext(hwnd, nullptr);   // ① 解绑该窗口的输入法上下文（IMM32）
+    ::ImmDisableIME(0);                     // ② 禁用当前线程的输入法
+    g_imeHwnd = hwnd;                       // ③ 挂窗口过程拦 IME 消息（TSF/微软拼音）
+    g_imePrevProc = reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(
+        hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&imeSuppressProc)));
+}
+
+} // namespace
+#endif
+
 // ---------------------------------------------------------------------
 // 窗口创建（两个窗口创建点共用唯一策略）
 // ---------------------------------------------------------------------
@@ -256,6 +304,11 @@ void applyToWindow(sf::RenderWindow& window, const std::string& titleUtf8) {
     window.create(sf::VideoMode(static_cast<unsigned>(windowWidth()),
                                 static_cast<unsigned>(windowHeight())),
                   sf::String::fromUtf8(titleUtf8.begin(), titleUtf8.end()), style);
+
+#ifdef _WIN32
+    // 窗口每次 create() 都会产生新的 HWND，必须在这里重新关闭它的输入法
+    suppressImeForWindow(window);
+#endif
 
     if (borderless()) {
         // Style::None 的窗口不会被窗口管理器自动居中，必须自己定位才能真铺满

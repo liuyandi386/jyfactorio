@@ -18,7 +18,7 @@ namespace cfg {
 // ================= 窗口设置 (config.py) =================
 inline constexpr int SCREEN_WIDTH  = 1280;   // 窗口宽
 inline constexpr int SCREEN_HEIGHT = 720;    // 窗口高
-inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.3";
+inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.4";
 
 // ================= 地图设置 =================
 inline constexpr int TILE_SIZE  = 32;    // 瓦片像素尺寸（Python一致）
@@ -337,6 +337,13 @@ struct BuildingInfo {
     const char* hotkey;                              // 快捷键
     std::vector<std::pair<ItemType, int>> cost;      // 建造成本  [JSON可调: building_costs]
     bool needDirection;                              // 放置时是否弹方向选择
+    // ---- 占地尺寸(格) ----
+    // 所有建筑统一 1×1（曾把旧版发电机做成 2×2，属错误，已废止）。
+    // **这里是尺寸的唯一数据源**：放置判定、网格登记、物流/电力邻接、
+    // 放置预览、面编辑器等一切涉及占地的逻辑都必须走 cfg::buildingSize()，
+    // 不要在别处硬编码 1/2。
+    uint8_t w = 1;
+    uint8_t h = 1;
 };
 inline std::array<BuildingInfo, BUILDING_COUNT> BUILDING_INFOS = {{
     {"基础塔",     "1", {{ItemType::IronOre,15},{ItemType::CopperOre,5}},  true },
@@ -349,7 +356,7 @@ inline std::array<BuildingInfo, BUILDING_COUNT> BUILDING_INFOS = {{
     {"虚空采矿场", "",  {{ItemType::IronOre,300},{ItemType::CopperOre,200},{ItemType::CircuitBoard,64}}, true },
     {"熔炉",       "6", {{ItemType::IronOre,20},{ItemType::CopperOre,5}},  true },  // 新增: 放置时选输出方向
     {"组装机",     "7", {{ItemType::IronOre,30},{ItemType::CopperOre,15}}, true },  // 继承弹药制造机成本
-    {"发电机",     "8", {{ItemType::IronOre,20},{ItemType::CopperOre,10},{ItemType::Coal,10}}, true },
+    {"发电机",     "8", {{ItemType::IronOre,20},{ItemType::CopperOre,10},{ItemType::Coal,10}}, true },  // 旧版大功率发电机
     {"电线杆",     "9", {{ItemType::IronOre,5},{ItemType::CopperOre,2}},   false },
     {"燃煤发电机", "0", {{ItemType::IronOre,30},{ItemType::CopperOre,15}}, true },
     {"电容库",     "-", {{ItemType::IronOre,25},{ItemType::CopperOre,20}}, false },
@@ -362,6 +369,17 @@ inline std::array<BuildingInfo, BUILDING_COUNT> BUILDING_INFOS = {{
     {"通物存储单元", "",  {{ItemType::IronIngot,10},{ItemType::CopperIngot,5},{ItemType::CircuitBoard,8},{ItemType::SteelIngot,2}}, false },
     {"通物终端",     "",  {{ItemType::IronIngot,5},{ItemType::CopperIngot,5},{ItemType::CircuitBoard,4}}, false },
 }};
+
+/// 建筑占地尺寸(格)
+struct BuildingSize { int w = 1; int h = 1; };
+
+/// 查询建筑占地尺寸 —— **尺寸的唯一数据源**。
+/// 目前所有建筑统一 1×1（旧版发电机的 2×2 已废止）。
+/// 任何涉及占地的逻辑都请走这里，禁止再次硬编码。
+inline BuildingSize buildingSize(BuildingType t) {
+    const auto& info = BUILDING_INFOS[static_cast<size_t>(t)];
+    return { static_cast<int>(info.w), static_cast<int>(info.h) };
+}
 
 // ================= 合金炉参数 =================
 inline float ALLOY_FURNACE_ENERGY = 16.0f; // 合金炉耗电 EU/秒       [JSON可调]
