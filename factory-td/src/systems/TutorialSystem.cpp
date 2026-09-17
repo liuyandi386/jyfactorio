@@ -33,6 +33,10 @@ const sf::Color C_DIM(155, 159, 168);
 constexpr float MOVE_THRESHOLD = 240.0f;
 /// 误操作纠正提示的冷却（秒），避免刷屏
 constexpr float MISTAKE_COOLDOWN = 2.5f;
+/// 教学脚本版本：新增/重排步骤后必须 +1。
+/// 旧进度文件按 step 索引续接，脚本一改索引就错位（会跳到不相干的步骤）——
+/// 版本不匹配时丢弃旧进度从头教起（新手教程的进度没有保留价值，重置无副作用）。
+constexpr int SCRIPT_VERSION = 2;
 
 // ---------------- 文件级动画计时器（进程内单例，无需持久化） ----------------
 float g_time = 0.0f;             // 累计时间（脉冲动画）
@@ -211,20 +215,46 @@ const std::vector<Step>& script() {
          "采矿场设置已打开", "请右键点击你已经放下的那座采矿场。",
          T::RightClickBuilding, B::Miner, 1, 0.0f},
 
+        {C::Logistics, "造出第一批弹药", "按 7 选组装机 → 放在熔炉旁 · 方向朝管道",
+         "织女星：铁锭打不死东西，炮塔吃的是弹药。组装机把 2 份铁锭 + 1 份铜锭压成 1 发弹药——"
+         "放到熔炉旁，输出方向对准产线。",
+         "组装机已就位 · 默认配方就是弹药",
+         "这一步需要『组装机』（快捷键 7），放在熔炉旁边并选好输出方向。",
+         T::PlaceBuilding, B::Assembler, 1, 0.0f},
+
+        {C::Logistics, "给组装机供料", "按 4 选管道 → 连起熔炉与组装机",
+         "织女星：再补一段管道，把熔炉出的锭送进组装机。熔炉会在铁锭与铜锭之间自动轮换，"
+         "两种锭都会自己送过来。",
+         "组装机已接入原料",
+         "这一步需要『管道』（快捷键 4），放在熔炉与组装机之间；"
+         "若组装机迟迟没有原料，右键熔炉把它的输出面转向管道。",
+         T::PlaceBuilding, B::Pipe, 1, 0.0f},
+
         // ---------- 第四章 · 防御与战斗 ----------
         {C::Defense, "架起防线", "按 1 选基础炮塔 → 放在路径旁",
-         "织女星：雷达上出现热源。本地生物对我们挖矿有点意见——"
-         "在它们的必经之路旁架一座炮塔。",
-         "炮塔已架设", "这一步需要『基础炮塔』（快捷键 1），放在敌人路径旁边。",
+         "织女星：雷达上出现热源。本地生物对我们挖矿有点意见——在它们的必经之路旁架一座炮塔。"
+         "注意：炮塔出厂时弹仓是空的，它只认弹药。",
+         "炮塔已架设 · 弹仓待供弹", "这一步需要『基础炮塔』（快捷键 1），放在敌人路径旁边。",
          T::PlaceBuilding, B::TowerBasic, 1, 0.0f},
+
+        {C::Defense, "打通弹药线", "按 4 选管道 → 连起组装机与炮塔",
+         "织女星：最后一段管道。组装机出的弹药会顺着管道直接进炮塔的弹仓，"
+         "接上之后，这条防线就不再缺弹。",
+         "弹药产线已贯通",
+         "这一步需要『管道』（快捷键 4），连在组装机与炮塔之间；"
+         "若弹药送不过去，检查组装机的输出方向是否朝着管道。",
+         T::PlaceBuilding, B::Pipe, 1, 0.0f},
 
         {C::Defense, "召唤一次演练", "按 Z 生成一个普通敌人",
          "织女星：不用干等真正的敌人。按 Z 放一个靶子，先看看炮塔的成色。",
          "靶子已生成", "按 Z 生成一个普通敌人。", T::SpawnEnemy, B::TowerBasic, 1, 0.0f},
 
         {C::Defense, "首次击杀", "让炮塔开火 · 按 X / C 可加大考验",
-         "织女星：弹药会自动补给，炮塔会自动索敌。这条防线，就是我们安心扩张的前提。",
-         "首次击杀完成！", "先让炮塔把敌人打掉。", T::KillEnemy, B::TowerBasic, 1, 0.0f},
+         "织女星：看好了——弹药从产线自己送上去，炮塔自己索敌。这条防线，就是我们安心扩张的前提。",
+         "首次击杀完成！",
+         "炮塔弹仓还是空的：确认组装机在造弹药、管道接到了炮塔；若熔炉只出铁锭，"
+         "右键采矿场换个采集范围。",
+         T::KillEnemy, B::TowerBasic, 1, 0.0f},
 
         // ---------- 第五章 · 电力网络 ----------
         {C::Power, "接入电力", "按 0 选燃煤发电机 → 左键放置",
@@ -232,9 +262,10 @@ const std::vector<Step>& script() {
          "发电机已就位", "这一步需要『燃煤发电机』（快捷键 0）。",
          T::PlaceBuilding, B::PowerGenerator, 1, 0.0f},
 
-        {C::Power, "架设电网", "按 9 选电线杆 → 放在发电机与炮塔之间",
-         "织女星：电不会自己长脚。用电线杆把电送到炮塔那里。",
-         "电网已连通", "这一步需要『电线杆』（快捷键 9）。",
+        {C::Power, "架设电网", "按 9 选电线杆 → 从发电机引出电线",
+         "织女星：电不会自己长脚。用电线杆把电从发电机引出来——"
+         "基础炮塔吃弹药不吃电，等换上电力塔，直接接这根杆子就行。",
+         "电网已连通", "这一步需要『电线杆』（快捷键 9），放在发电机旁边。",
          T::PlaceBuilding, B::PowerPole, 1, 0.0f},
 
         // ---------- 第六章 · 自动化与进阶 ----------
@@ -450,9 +481,10 @@ sf::FloatRect highlightRect(Game& g) {
     const Step& st = cur(g.tutorial);
 
     // 世界里已有目标建筑 → 高亮世界中的它；否则高亮右侧面板的按钮
+    // 注意：只有"右键"类步骤才高亮世界里的旧建筑——"放置"类步骤一律高亮右侧面板按钮，
+    //       否则当世界已存在同类建筑（如第 2、3 次铺管道）时会误导玩家去点那一栋。
     const entt::entity e = findFirst(g, st.building);
-    if (e != entt::null && (st.task == Task::RightClickBuilding ||
-                            st.task == Task::PlaceBuilding)) {
+    if (e != entt::null && st.task == Task::RightClickBuilding) {
         return buildingScreenRect(g, e);
     }
     if (g.ui) {
@@ -608,6 +640,7 @@ void saveProgressFile(const State& s) {
         std::filesystem::create_directories("saves", ec);
         json j;
         j["v"] = 1;
+        j["script_v"] = SCRIPT_VERSION;
         j["active"] = s.active;
         j["skipped"] = s.skipped;
         j["finished"] = s.finished;
@@ -644,6 +677,12 @@ bool loadProgressFile(State& out) {
         if (!f.good()) return false;
         json j;
         f >> j;
+        // 教学脚本改版（步骤增删/重排）后，旧档里的 step 索引会指向错位的步骤：
+        // 丢弃旧进度、从头教起（返回 true 但 active=false → 调用方走 begin）。
+        if (j.value("script_v", 1) != SCRIPT_VERSION) {
+            out = State{};
+            return true;
+        }
         out.skipped = j.value("skipped", false);
         out.finished = j.value("finished", false);
         out.mistakes = j.value("mistakes", 0);
