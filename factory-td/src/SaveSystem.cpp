@@ -306,7 +306,7 @@ bool saveGameToFile(Game& g, const std::string& path) {
                     break;
                 }
                 default:
-                    break;   // 电线/管道/电线杆/通物存储/通物终端：无额外状态
+                    break;   // 电线/管道/通物存储/通物终端：无额外状态
             }
             // 面配置（所有带 FaceConfig 的建筑统一保存：采矿机/熔炉/合金炉/
             // 组装机/发电机/储物桶/电线等——右键旋转过的面必须保留）
@@ -389,6 +389,9 @@ bool loadGameFromFile(Game& g, const std::string& path) {
         // ---- 2. 建筑 ----
         for (const auto& bj : j.value("buildings", json::array())) {
             const auto bt = static_cast<cfg::BuildingType>(bj.value("type", 0));
+            // 类型越界直接跳过：v1.3.5 删掉了电线杆（原索引 11），更早的存档里
+            // 索引会整体错位、末尾还可能超出 BUILDING_COUNT，若放行会读 BUILDING_INFOS 越界。
+            if (bt < cfg::BuildingType::TowerBasic || bt >= cfg::BuildingType::COUNT) continue;
             const entt::entity e = g.placeBuilding(bj.value("x", 0), bj.value("y", 0),
                                                    bt, bj.value("dir", 2), false);
             if (e == entt::null) continue;
@@ -486,7 +489,7 @@ bool loadGameFromFile(Game& g, const std::string& path) {
                     break;
                 }
                 default:
-                    break;   // 电线/管道/电线杆/通物存储/通物终端：无额外状态
+                    break;   // 电线/管道/通物存储/通物终端：无额外状态
             }
             // 面配置统一恢复（采矿机/熔炉/合金炉/组装机/发电机/储物桶/电线等）
             if (g.reg.all_of<FaceConfig>(e) && bj.contains("faces")) {

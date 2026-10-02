@@ -252,7 +252,6 @@ bool AssetManager::load(const std::string& assetDir) {
         loadTexture(machineKey("generator", d, true), sprites + "/machines/machine_generator_" +
                        DIR_NAMES_4[d] + ".png");
     }
-    loadTexture("machine_power_pole", sprites + "/machines/machine_power_pole.png");
 
     // ---- 储物桶（4方向直接映射） ----
     for (int d = 0; d < 4; ++d)
@@ -774,36 +773,6 @@ void AssetManager::generateStaticTextures() {
         rt.draw(border);
         rt.display();
         textures_[machineKey("generator", d, true)] = rt.getTexture();
-    }
-
-    // ---- 电线杆（金属杆 + 横担 + 瓷绝缘子，覆盖旧 PNG） ----
-    {
-        sf::RenderTexture rt; rt.create(S, S); rt.clear(sf::Color::Transparent);
-        const float cx = S / 2.0f;
-        sf::RectangleShape pole({4.0f, static_cast<float>(S - 2.0f)});
-        pole.setPosition(cx - 2.0f, 1.0f);
-        pole.setFillColor(sf::Color(66, 60, 52));
-        pole.setOutlineColor(sf::Color(40, 36, 32));
-        pole.setOutlineThickness(1.0f);
-        rt.draw(pole);
-        sf::RectangleShape arm({static_cast<float>(S - 6.0f), 3.0f});
-        arm.setPosition(3.0f, 8.0f);
-        arm.setFillColor(sf::Color(76, 70, 60));
-        rt.draw(arm);
-        sf::CircleShape ins1(2.5f);
-        ins1.setPosition(5.0f, 11.0f);
-        ins1.setFillColor(sf::Color(200, 200, 200));
-        rt.draw(ins1);
-        sf::CircleShape ins2(2.5f);
-        ins2.setPosition(S - 8.0f, 11.0f);
-        ins2.setFillColor(sf::Color(200, 200, 200));
-        rt.draw(ins2);
-        sf::RectangleShape foot({8.0f, 4.0f});
-        foot.setPosition(cx - 4.0f, S - 5.0f);
-        foot.setFillColor(sf::Color(50, 46, 40));
-        rt.draw(foot);
-        rt.display();
-        textures_["machine_power_pole"] = rt.getTexture();
     }
 
     // ---- 炮塔（4种 × 8方向：程序化重画，覆盖旧 PNG） ----

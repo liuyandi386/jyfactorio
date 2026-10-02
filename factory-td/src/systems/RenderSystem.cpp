@@ -133,7 +133,7 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
                        g.worldToScreen(pos.x * cfg::TILE_SIZE, pos.y * cfg::TILE_SIZE), z);
     }
 
-    // ================= 3. 建筑精灵层（桶/发电机/组装机/熔炉/采矿机/电线杆/电容） =================
+    // ================= 3. 建筑精灵层（桶/发电机/组装机/熔炉/采矿机/电容） =================
     for (auto [e, b] : g.reg.view<Building>().each()) {
         const sf::Vector2f sc = g.worldToScreen(b.pos.x * cfg::TILE_SIZE, b.pos.y * cfg::TILE_SIZE);
         if (!onScreen(g, sc, b.w * cfg::TILE_SIZE * z)) continue;
@@ -165,9 +165,6 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
                 break;
             case cfg::BuildingType::MinerVoid:
                 tex = &g.assets.get(AssetManager::machineKey("miner_void", b.dir, true));
-                break;
-            case cfg::BuildingType::PowerPole:
-                tex = &g.assets.get("machine_power_pole");
                 break;
             case cfg::BuildingType::PowerGenerator:
                 tex = &g.assets.get("power_generator");
@@ -577,25 +574,6 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
         rt.draw(items);
     }
 
-    // ================= 5. 电线杆连线 =================
-    {
-        std::vector<entt::entity> poles;
-        for (auto [e, b, pole] : g.reg.view<Building, PowerPole>().each()) poles.push_back(e);
-        for (size_t i = 0; i < poles.size(); ++i) {
-            for (size_t j = i + 1; j < poles.size(); ++j) {
-                const auto& b1 = g.reg.get<Building>(poles[i]);
-                const auto& b2 = g.reg.get<Building>(poles[j]);
-                const auto c1 = g.buildingCenter(b1), c2 = g.buildingCenter(b2);
-                const float dx = c2.x - c1.x, dy = c2.y - c1.y;
-                if (dx * dx + dy * dy > cfg::POWER_POLE_RADIUS * cfg::POWER_POLE_RADIUS) continue;
-                sf::VertexArray line(sf::Lines, 2);
-                line[0] = sf::Vertex(g.worldToScreen(c1.x, c1.y), sf::Color(150, 150, 150));
-                line[1] = sf::Vertex(g.worldToScreen(c2.x, c2.y), sf::Color(150, 150, 150));
-                rt.draw(line);
-            }
-        }
-    }
-
     // ================= 6. 电线（面配置色块 + 连接线） =================
     for (auto [e, b, fc] : g.reg.view<Building, FaceConfig>().each()) {
         if (b.type != cfg::BuildingType::PowerWire) continue;
@@ -641,7 +619,6 @@ void RenderSystem::renderWorld(Game& g, sf::RenderTarget& rt) {
             const bool powerDevice = g.reg.all_of<PowerGeneratorNode>(nb) ||
                                      g.reg.all_of<PowerCapacitor>(nb) ||
                                      g.reg.all_of<PowerConsumer>(nb) ||
-                                     g.reg.all_of<PowerPole>(nb) ||
                                      (g.reg.all_of<Building>(nb) &&
                                       g.reg.get<Building>(nb).type == cfg::BuildingType::PowerWire);
             if (!powerDevice) continue;

@@ -97,7 +97,6 @@
     "furnace":         { "iron_ore": 20, "copper_ore": 5 },
     "assembler":       { "iron_ore": 30, "copper_ore": 15 },
     "generator":       { "iron_ore": 20, "copper_ore": 10, "coal": 10 },
-    "power_pole":      { "iron_ore": 5, "copper_ore": 2 },
     "power_generator": { "iron_ore": 30, "copper_ore": 15 },
     "capacitor":       { "iron_ore": 25, "copper_ore": 20 },
     "power_wire":      { "iron_ore": 3, "copper_ore": 2 },
@@ -117,7 +116,6 @@
   "powergen_coal_burn_time": 5.0,
   "powergen_infinite_fuel": false,
 
-  "power_pole_radius": 150.0,
   "electric_tower_grid_need": 8.0,
   "miner_power_need": 10.0,
   "miner_free_power": true,

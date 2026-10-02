@@ -50,7 +50,6 @@ sf::Color buildingCategoryColor(cfg::BuildingType t) {
         case cfg::BuildingType::Assembler:      return sf::Color(122, 200, 92);  // 绿
         case cfg::BuildingType::Generator:      return sf::Color(232, 172, 60);  // 黄橙
         case cfg::BuildingType::PowerGenerator: return sf::Color(255, 122, 42);  // 橙
-        case cfg::BuildingType::PowerPole:      return sf::Color(152, 162, 182); // 灰蓝
         case cfg::BuildingType::Capacitor:      return sf::Color(0, 162, 255);   // 蓝
         case cfg::BuildingType::PowerWire:      return sf::Color(220, 200, 60);  // 黄
         case cfg::BuildingType::Pipe:           return sf::Color(122, 132, 142); // 灰
@@ -2234,7 +2233,7 @@ constexpr int HELP_TAB_COUNT = 6;
 /// 建筑用途说明（按 cfg::BuildingType 枚举序）
 const char* buildingHelp(cfg::BuildingType t) {
     switch (t) {
-        case cfg::BuildingType::TowerBasic:    return "基础炮塔，消耗弹药自动开火，前期主力";
+        case cfg::BuildingType::TowerBasic:    return "基础塔，消耗弹药自动开火，前期主力";
         case cfg::BuildingType::TowerRapid:    return "速射塔，射速最快，耗弹量大，适合弹药充足时";
         case cfg::BuildingType::TowerSniper:   return "狙击塔，射程最远、单发伤害最高，专打坦克";
         case cfg::BuildingType::TowerElectric: return "电力塔，不需弹药但必须接入电网供电";
@@ -2245,7 +2244,6 @@ const char* buildingHelp(cfg::BuildingType t) {
         case cfg::BuildingType::Furnace:       return "熔炉：矿石→锭（铁/铜/金/镍/银/铅），放置时选输出面";
         case cfg::BuildingType::Assembler:     return "组装机：右键选定配方后量产（弹药 / 电路板）";
         case cfg::BuildingType::Generator:     return "旧版大功率发电机：1块煤→3000EU，爆发式供电";
-        case cfg::BuildingType::PowerPole:     return "电线杆：150px半径内恒导通，用于跨距离连电网";
         case cfg::BuildingType::PowerGenerator:return "燃煤发电机：烧煤稳定发电32EU/秒，需持续供煤";
         case cfg::BuildingType::Capacitor:     return "电容库：储存50000EU，平滑发电与用电的波动";
         case cfg::BuildingType::PowerWire:     return "电力线缆：四面独立配置(无/输入/传输/输出)，右键编辑";
@@ -2285,7 +2283,7 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             p("按 1 / 2 放炮塔。基础/速射/狙击塔需要弹药，电力塔需要电网供电。");
             p("弹药由组装机量产，前期也可用 V 随身工作台手工合成。");
             h("◆ 第 6 步 · 供电");
-            p("按 0 放燃煤发电机（烧煤）→ 用 9 电线杆或 = 电力线缆把电送出去。");
+            p("按 0 放燃煤发电机（烧煤）→ 用 = 电力线缆把电送出去。");
             p("线缆四面可独立配置，右键点线缆逐面切换 无/输入/传输/输出。");
             h("◆ 第 7 步 · 进阶物流（中后期）");
             p("用电路板 + 钢锭造通物接口 / 存储单元 / 终端：物品接入通物网络，全网共享。");
@@ -2302,7 +2300,7 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             p("左键放置（带方向的建筑会弹出方向选择窗） · DEL 拆除并返还材料");
             h("◆ 右键能做什么");
             p("采矿场：旋转输出面 · 组装机/合金炉：打开配方菜单");
-            p("电线 / 熔炉 / 储物桶 / 发电机：打开面配置编辑器");
+            p("电力线缆 / 熔炉 / 储物桶 / 发电机：打开面配置编辑器");
             p("通物接口：输出过滤 · 通物存储单元 / 通物终端：查看网络物品清单");
             p("管道 / 分流器：自动链接四邻，无需任何操作");
             h("◆ 面板");
@@ -2358,11 +2356,13 @@ std::vector<HelpLine> buildHelpPage(int tab) {
             p("全部电力以 EU/秒 计（与帧率无关）。电网无损耗、无过载——这是设计如此。");
             h("◆ 发电");
             p("燃煤发电机：烧煤稳定输出 32EU/秒，需要持续供煤（用管道送煤进去）。");
-            p("旧版大功率发电机：1 块煤 → 3000EU，爆发式供电，适合应急。");
+            p("发电机（旧版大功率）：1 块煤 → 3000EU，爆发式供电，适合应急。");
             h("◆ 输电");
-            p("电线杆：150px 半径内恒导通，用来跨越长距离。");
             p("电力线缆：四面独立配置，可设为 无 / 输入 / 传输 / 输出，右键逐面切换。");
-            p("导通规则：本面为 输出或传输 且 对面为 输入或传输，才通电。");
+            p("出厂四面全是『传输』，所以一路铺过去就能通电，通常不用改；");
+            p("要精准控制时才配：发电侧那面设输入、用电侧设输出。");
+            p("导通规则：设备→线缆看线缆面（输入或传输）；线缆→设备看线缆面（输出或传输）；");
+            p("线缆→线缆要求两面都不是『无』。电只能沿线缆走，发电机与用电设备直接相邻不通电。");
             h("◆ 储能与用电");
             p("电容库：容量 50000EU，充放速率 64EU/秒，用来平滑波动。");
             p("电力塔：8EU/秒，断电即停火。熔炉、组装机、合金炉、采矿场（测试期）不需要电力。");
@@ -2382,7 +2382,9 @@ std::vector<HelpLine> buildHelpPage(int tab) {
                 p("每个矿点储量 1000，采完会消失。");
             }
             h("◆ 电网不通？");
-            p("发电机要有煤；线缆面要配成 输入/输出；电线杆之间不超过 150px。");
+            p("先查有没有在发电：发电机得有煤（用物品管道送进去），烧煤才有输出。");
+            p("再查线缆是否真连上了：电只沿线缆走，发电机和用电设备直接贴在一起是不通的，");
+            p("中途断一格就整条断；线缆面若被改过，发电侧要留输入、用电侧要留输出。");
             p("电容库只储能，不会自己发电。");
             h("◆ 通物网络存不进去？");
             p("网络容量来自通物存储单元（每块 20000），没有存储单元就存不进物品。");

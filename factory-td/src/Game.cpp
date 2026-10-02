@@ -334,10 +334,6 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
             reg.emplace<FaceConfig>(e, FaceConfig::makeAll(cfg::FaceMode::INPUT, 3));
             break;
         }
-        case cfg::BuildingType::PowerPole:
-            // 电线杆：150px半径连接电网
-            reg.emplace<PowerPole>(e);
-            break;
         case cfg::BuildingType::PowerWire:
             // 电力线缆：4面全TRANSFER（可编辑为NONE/INPUT/TRANSFER/OUTPUT）
             reg.emplace<FaceConfig>(e, FaceConfig::makeAll(cfg::FaceMode::TRANSFER, 4));
@@ -389,7 +385,7 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
     // 电网相关建筑 → 标记拓扑重建
     const bool isMiner = t == cfg::BuildingType::Miner || t == cfg::BuildingType::MinerL2 ||
                          t == cfg::BuildingType::MinerL3 || t == cfg::BuildingType::MinerVoid;
-    if (t == cfg::BuildingType::PowerWire || t == cfg::BuildingType::PowerPole ||
+    if (t == cfg::BuildingType::PowerWire ||
         t == cfg::BuildingType::PowerGenerator || t == cfg::BuildingType::Generator ||
         t == cfg::BuildingType::Capacitor || t == cfg::BuildingType::TowerElectric ||
         t == cfg::BuildingType::AlloyFurnace || isMiner)
@@ -473,7 +469,7 @@ void Game::removeBuilding(entt::entity e, bool refund) {
     // 电网建筑拆除 → 重建拓扑
     const bool isMiner = type == cfg::BuildingType::Miner || type == cfg::BuildingType::MinerL2 ||
                          type == cfg::BuildingType::MinerL3 || type == cfg::BuildingType::MinerVoid;
-    if (type == cfg::BuildingType::PowerWire || type == cfg::BuildingType::PowerPole ||
+    if (type == cfg::BuildingType::PowerWire ||
         type == cfg::BuildingType::PowerGenerator || type == cfg::BuildingType::Generator ||
         type == cfg::BuildingType::Capacitor || type == cfg::BuildingType::TowerElectric ||
         type == cfg::BuildingType::AlloyFurnace || isMiner)
@@ -485,15 +481,15 @@ void Game::deleteAtCursor() {
     const auto mouse = sf::Mouse::getPosition(window);
     const sf::Vector2f world = screenToWorld({static_cast<float>(mouse.x),
                                               static_cast<float>(mouse.y)});
-    // 按Python从实体到基础设施的顺序检查（22种建筑全覆盖）
-    const std::array<cfg::BuildingType, 22> order = {
+    // 按Python从实体到基础设施的顺序检查（21种建筑全覆盖）
+    const std::array<cfg::BuildingType, 21> order = {
         cfg::BuildingType::TowerBasic, cfg::BuildingType::TowerRapid,
         cfg::BuildingType::TowerSniper, cfg::BuildingType::TowerElectric,
         cfg::BuildingType::Miner, cfg::BuildingType::MinerL2,
         cfg::BuildingType::MinerL3, cfg::BuildingType::MinerVoid,
         cfg::BuildingType::Furnace, cfg::BuildingType::AlloyFurnace,
         cfg::BuildingType::Assembler, cfg::BuildingType::Generator,
-        cfg::BuildingType::PowerPole, cfg::BuildingType::Bucket,
+        cfg::BuildingType::Bucket,
         cfg::BuildingType::Pipe, cfg::BuildingType::PowerGenerator,
         cfg::BuildingType::Capacitor, cfg::BuildingType::PowerWire,
         cfg::BuildingType::Splitter, cfg::BuildingType::MeInterface,

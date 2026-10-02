@@ -4,7 +4,7 @@
 // 移植并合并 Python 的电力代码：
 //   power_manager.py  → 设备注册 + BFS重建网络拓扑 + 统计
 //   power_network.py  → 按电线四面配置BFS路由 + 电容充放电 + 供电判定
-//   core/PowerGrid.py → 电线杆150px半径连接（旧版电网，合并入统一电网）
+//   core/PowerGrid.py → 旧版电线杆电网（已废弃：电线杆建筑已移除，仅保留统一 EU 电网）
 //   generator.py      → 燃煤发电机(32EU/秒, 煤燃5秒)
 //   entities/Generator.py → 旧版大功率发电机(1煤→3000EU/3秒)
 //
@@ -26,7 +26,6 @@ namespace {
 bool isGen(const Game& g, entt::entity e) { return g.reg.all_of<PowerGeneratorNode>(e); }
 bool isCap(const Game& g, entt::entity e) { return g.reg.all_of<PowerCapacitor>(e); }
 bool isConsumer(const Game& g, entt::entity e) { return g.reg.all_of<PowerConsumer>(e); }
-bool isPole(const Game& g, entt::entity e) { return g.reg.all_of<PowerPole>(e); }
 bool isWire(const Game& g, entt::entity e) {
     return g.reg.valid(e) && g.reg.all_of<Building, FaceConfig>(e) &&
            g.reg.get<Building>(e).type == cfg::BuildingType::PowerWire;
@@ -56,7 +55,6 @@ void PowerSystem::rebuild(Game& g) {
     for (auto e : g.reg.view<PowerGeneratorNode>()) devices.push_back(e);
     for (auto e : g.reg.view<PowerCapacitor>()) devices.push_back(e);
     for (auto e : g.reg.view<PowerConsumer>()) devices.push_back(e);
-    for (auto e : g.reg.view<PowerPole>()) devices.push_back(e);
     for (auto e : g.reg.view<Building>()) {
         const auto& b = g.reg.get<Building>(e);
         if (b.type == cfg::BuildingType::PowerWire) devices.push_back(e);
@@ -64,8 +62,7 @@ void PowerSystem::rebuild(Game& g) {
     if (devices.empty()) return;
 
     // ---- 构建邻接表 ----
-    // 规则1（Python _scan_wire_neighbors）：电线与相邻格子的设备自动连接
-    // 规则2（Python PowerGrid.add_pole）：电线杆150px半径内互相连接/连接设备
+    // 规则（Python _scan_wire_neighbors）：电线与相邻格子的设备自动连接
     std::unordered_map<entt::entity, std::vector<entt::entity>> adj;
     for (entt::entity d : devices) adj[d];
 
@@ -80,21 +77,9 @@ void PowerSystem::rebuild(Game& g) {
                 const entt::entity nb = g.grid.at(nx, ny).building;
                 if (nb == entt::null) continue;
                 if (isWire(g, nb) || isGen(g, nb) || isCap(g, nb) ||
-                    isConsumer(g, nb) || isPole(g, nb)) {
+                    isConsumer(g, nb)) {
                     adj[d].push_back(nb);
                     adj[nb].push_back(d);
-                }
-            }
-        } else if (isPole(g, d)) {
-            // 电线杆：150px半径内连接其他设备/电线杆（恒导通）
-            const auto center = g.buildingCenter(g.reg.get<Building>(d));
-            for (entt::entity other : devices) {
-                if (other == d) continue;
-                const auto oc = g.buildingCenter(g.reg.get<Building>(other));
-                const float dx = oc.x - center.x, dy = oc.y - center.y;
-                if (dx * dx + dy * dy <= cfg::POWER_POLE_RADIUS * cfg::POWER_POLE_RADIUS) {
-                    adj[d].push_back(other);
-                    adj[other].push_back(d);
                 }
             }
         }
@@ -116,7 +101,6 @@ void PowerSystem::rebuild(Game& g) {
             else if (isCap(g, cur)) net.capacitors.push_back(cur);
             else if (isConsumer(g, cur)) net.consumers.push_back(cur);
             else if (isWire(g, cur)) net.wires.push_back(cur);
-            else if (isPole(g, cur)) net.poles.push_back(cur);
             for (entt::entity nb : adj[cur]) {
                 if (!visited.count(nb)) {
                     visited.insert(nb);
@@ -220,7 +204,6 @@ void PowerSystem::update(Game& g, float dt) {
         //   发电机/电容 → 电线：电线对面为 INPUT/TRANSFER
         //   电线 → 电线：本面 OUTPUT/TRANSFER 且 对面 INPUT/TRANSFER
         //   电线 → 电容/用电设备：本面 OUTPUT/TRANSFER
-        //   电线杆：恒导通（旧版电网合并）
         std::unordered_set<entt::entity> powered;
         std::queue<entt::entity> q;
         for (entt::entity ge : runningGens) { powered.insert(ge); q.push(ge); }
@@ -239,9 +222,7 @@ void PowerSystem::update(Game& g, float dt) {
                 const bool curWire = isWire(g, cur);
                 const bool nbWire = isWire(g, nb);
 
-                if (isPole(g, cur) || isPole(g, nb)) {
-                    canReach = true;                          // 电线杆恒导通
-                } else if (curWire && nbWire) {
+                if (curWire && nbWire) {
                     // 电线 → 电线：双方面配置匹配
                     const auto& myFc = g.reg.get<FaceConfig>(cur);
                     const auto& nbFc = g.reg.get<FaceConfig>(nb);
@@ -266,37 +247,6 @@ void PowerSystem::update(Game& g, float dt) {
                     q.push(nb);
                 }
             }
-            // 电线杆半径连接（恒导通，旧版电网规则）
-            if (isPole(g, cur)) {
-                const auto center = g.buildingCenter(g.reg.get<Building>(cur));
-                for (entt::entity other : net.generators) {
-                    if (powered.count(other)) continue;
-                    const auto oc = g.buildingCenter(g.reg.get<Building>(other));
-                    const float dx = oc.x - center.x, dy = oc.y - center.y;
-                    if (dx * dx + dy * dy <= cfg::POWER_POLE_RADIUS * cfg::POWER_POLE_RADIUS) {
-                        powered.insert(other);
-                        q.push(other);
-                    }
-                }
-                for (entt::entity other : net.capacitors) {
-                    if (powered.count(other)) continue;
-                    const auto oc = g.buildingCenter(g.reg.get<Building>(other));
-                    const float dx = oc.x - center.x, dy = oc.y - center.y;
-                    if (dx * dx + dy * dy <= cfg::POWER_POLE_RADIUS * cfg::POWER_POLE_RADIUS) {
-                        powered.insert(other);
-                        q.push(other);
-                    }
-                }
-                for (entt::entity other : net.consumers) {
-                    if (powered.count(other)) continue;
-                    const auto oc = g.buildingCenter(g.reg.get<Building>(other));
-                    const float dx = oc.x - center.x, dy = oc.y - center.y;
-                    if (dx * dx + dy * dy <= cfg::POWER_POLE_RADIUS * cfg::POWER_POLE_RADIUS) {
-                        powered.insert(other);
-                        q.push(other);
-                    }
-                }
-            }
         }
 
         // ---- 有电的电容库作为二级电源（Python行为） ----
@@ -314,7 +264,6 @@ void PowerSystem::update(Game& g, float dt) {
                 const entt::entity nb = g.grid.at(nx, ny).building;
                 if (nb == entt::null || powered.count(nb)) continue;
                 const bool nbWire = isWire(g, nb);
-                if (isPole(g, nb)) { powered.insert(nb); q.push(nb); continue; }
                 if (!nbWire) continue;
                 const auto nbFace = g.reg.get<FaceConfig>(nb).get(cfg::Dir::OPPOSITE[dir]);
                 if (nbFace == cfg::FaceMode::INPUT || nbFace == cfg::FaceMode::TRANSFER) {

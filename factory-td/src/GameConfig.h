@@ -246,7 +246,6 @@ inline float POWERGEN_COAL_BURN_TIME = 5.0f;  // 每块煤燃烧(秒)        [JS
 inline bool  POWERGEN_INFINITE_FUEL = false;  // 测试无限燃料开关      [JSON可调]
 
 // ================= 电网参数（单位: EU/秒） =================
-inline float POWER_POLE_RADIUS = 150.0f;      // 电线杆连接半径(像素)   [JSON可调]
 inline float ELECTRIC_TOWER_GRID_NEED = 8.0f; // 电力塔入网需求EU/秒   [JSON可调]
 inline float MINER_POWER_NEED = 10.0f;        // 采矿机耗电EU/秒        [JSON可调]
 inline bool  MINER_FREE_POWER = true;         // 测试模式: 采矿机免供电 [JSON可调]
@@ -333,7 +332,6 @@ enum class BuildingType : uint8_t {
     Furnace,      // 熔炉（矿石→锭）
     Assembler,    // 组装机（自动化合成）
     Generator,    // 燃煤发电机（旧版大功率）
-    PowerPole,    // 电线杆
     PowerGenerator, // 燃煤发电机（工业EU）
     Capacitor,    // 电容库
     PowerWire,    // 电力线缆
@@ -373,7 +371,6 @@ inline std::array<BuildingInfo, BUILDING_COUNT> BUILDING_INFOS = {{
     {"熔炉",       "6", {{ItemType::IronOre,20},{ItemType::CopperOre,5}},  true },  // 新增: 放置时选输出方向
     {"组装机",     "7", {{ItemType::IronOre,30},{ItemType::CopperOre,15}}, true },  // 继承弹药制造机成本
     {"发电机",     "8", {{ItemType::IronOre,20},{ItemType::CopperOre,10},{ItemType::Coal,10}}, true },  // 旧版大功率发电机
-    {"电线杆",     "9", {{ItemType::IronOre,5},{ItemType::CopperOre,2}},   false },
     {"燃煤发电机", "0", {{ItemType::IronOre,30},{ItemType::CopperOre,15}}, true },
     {"电容库",     "-", {{ItemType::IronOre,25},{ItemType::CopperOre,20}}, false },
     {"电力线缆",   "=", {{ItemType::IronOre,3},{ItemType::CopperOre,2}},   false },

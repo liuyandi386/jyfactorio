@@ -38,7 +38,7 @@ std::optional<BuildingType> parseBuilding(const std::string& key) {
         "basic_tower", "rapid_tower", "sniper_tower", "electric_tower",
         "miner", "miner_l2", "miner_l3", "miner_void",
         "furnace", "assembler", "generator",
-        "power_pole", "power_generator", "capacitor", "power_wire",
+        "power_generator", "capacitor", "power_wire",
         "pipe", "bucket", "splitter", "alloy_furnace",
         "me_interface", "me_drive", "me_terminal"};
     for (int i = 0; i < BUILDING_COUNT; ++i)
@@ -186,7 +186,6 @@ bool loadConfig(const std::string& path) {
     setIf(POWERGEN_OUTPUT_EUT, j, "powergen_output_eu_s");
     setIf(POWERGEN_COAL_BURN_TIME, j, "powergen_coal_burn_time");
     setIf(POWERGEN_INFINITE_FUEL, j, "powergen_infinite_fuel");
-    setIf(POWER_POLE_RADIUS, j, "power_pole_radius");
     setIf(ELECTRIC_TOWER_GRID_NEED, j, "electric_tower_grid_need");
     setIf(MINER_POWER_NEED, j, "miner_power_need");
     setIf(MINER_FREE_POWER, j, "miner_free_power");

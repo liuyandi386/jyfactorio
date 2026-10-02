@@ -6,8 +6,7 @@
 //   systems/power/power_manager.py + power_network.py（工业EU电网）
 //   core/PowerGrid.py（旧版电线杆电网）
 //
-// 拓扑：电线按"相邻格子接触"自动连接（Python行为），电线杆按150px
-//       半径连接设备/其他电线杆（旧版行为），二者合并为统一电网。
+// 拓扑：电线按"相邻格子接触"自动连接，设备经电线面配置路由（Python行为）。
 // 路由：每帧从运行中的发电机出发，按电线四面配置 BFS 传播电力；
 //       电量按"发电-耗电"平衡，盈余充入电容库，不足时电容库放电，
 //       供电不足的塔进入断电状态。
@@ -26,7 +25,6 @@ struct PowerNetwork {
     std::vector<entt::entity> capacitors;  // 电容库
     std::vector<entt::entity> consumers;   // 用电设备（电力塔/采矿机）
     std::vector<entt::entity> wires;       // 电力线缆
-    std::vector<entt::entity> poles;       // 电线杆
     // 统计（供UI显示）
     float totalGeneration = 0.0f;   // 发电 EU/秒
     float totalConsumption = 0.0f;  // 耗电 EU/秒

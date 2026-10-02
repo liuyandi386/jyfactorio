@@ -40,8 +40,7 @@ entt::entity buildingAtWorld(const Game& g, sf::Vector2f world) {
             if (g.reg.get<Building>(e).type == t && hitBuilding(g, e, world)) return e;
         }
     }
-    for (auto t : {cfg::BuildingType::PowerWire, cfg::BuildingType::Splitter,
-                   cfg::BuildingType::PowerPole}) {
+    for (auto t : {cfg::BuildingType::PowerWire, cfg::BuildingType::Splitter}) {
         for (auto e : g.reg.view<Building>()) {
             if (g.reg.get<Building>(e).type == t && hitBuilding(g, e, world)) return e;
         }
@@ -84,7 +83,6 @@ static void handleKey(Game& g, const sf::Event::KeyEvent& key) {
         case K::Num6: select(cfg::BuildingType::Furnace); break;      // 新增熔炉
         case K::Num7: select(cfg::BuildingType::Assembler); break;    // 组装机(替代弹药机)
         case K::Num8: select(cfg::BuildingType::Generator); break;
-        case K::Num9: select(cfg::BuildingType::PowerPole); break;
         case K::Num0: select(cfg::BuildingType::PowerGenerator); break;
         case K::Hyphen: select(cfg::BuildingType::Capacitor); break;  // '-'电容库
         case K::Equal: select(cfg::BuildingType::PowerWire); break;   // '='电力线缆
@@ -235,7 +233,7 @@ void PlayerSystem::handleRightClick(Game& g, sf::Vector2f world, sf::Vector2f sc
             break;
         }
         default:
-            break;   // 塔/电线杆/电容库/管道/分流器无右键交互
+            break;   // 塔/电容库/管道/分流器无右键交互
     }
 
     // 新手引导：右键事件（"调整输出面"等步骤判定）

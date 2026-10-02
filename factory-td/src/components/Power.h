@@ -6,7 +6,6 @@
 //   Generator:  燃煤发电机（供电方，单位 EU/秒）
 //   Capacitor:  电容库（储能缓冲，充/放电速率限制）
 //   Consumer:   用电设备（电力塔8EU/秒、采矿机10EU/秒）
-//   Pole:       电线杆（150px半径内连接设备/电线杆，恒导通）
 // 电力线缆的面配置复用 FaceConfig 组件（modeCount=4）。
 // 电力按"发电量-耗电量"平衡，经电线面配置BFS路由；不足时电容放电，
 // 盈余时电容充电（详见 PowerSystem.cpp，逻辑移植自 power_network.py）。
@@ -53,9 +52,4 @@ struct PowerCapacitor {
 struct PowerConsumer {
     float rate = 0.0f;      // 耗电速率(EU/秒)
     bool powered = false;   // 是否已供电
-};
-
-/// 电线杆组件
-struct PowerPole {
-    float radius = cfg::POWER_POLE_RADIUS; // 连接半径(像素)
 };
