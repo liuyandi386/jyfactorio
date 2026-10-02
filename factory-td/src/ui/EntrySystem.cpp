@@ -26,7 +26,7 @@ namespace {
 // ---------------- 文案 ----------------
 constexpr const char* kTitleMain = "织星计划";
 constexpr const char* kTitleEn   = "W E A V E S T A R";
-constexpr const char* kVersion   = "v1.3.4  ALPHA BUILD";
+constexpr const char* kVersion   = "v1.3.5  ALPHA BUILD";
 constexpr const char* kStudio    = "JYGame 工作室";
 constexpr const char* kCompany   = "织星工业";                                   // 玩家所属公司
 constexpr const char* kTagline   = "建厂 · 清障 · 交付 · 前往下一颗星球";

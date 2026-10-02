@@ -18,7 +18,7 @@ namespace cfg {
 // ================= 窗口设置 (config.py) =================
 inline constexpr int SCREEN_WIDTH  = 1280;   // 窗口宽
 inline constexpr int SCREEN_HEIGHT = 720;    // 窗口高
-inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.4";
+inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.5";
 
 // ================= 地图设置 =================
 inline constexpr int TILE_SIZE  = 32;    // 瓦片像素尺寸（Python一致）
