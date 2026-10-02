@@ -257,7 +257,14 @@ inline float CAPACITOR_MAX_OUT  = 64.0f;      // 最大放电EU/秒          [JS
 // ================= 物品管道 (PipeSystem) =================
 inline float PIPES_TRANSFER_INTERVAL = 0.25f; // 路由转移间隔(秒)      [JSON可调]
 inline int   PIPES_MAX_BUFFER       = 16;     // 管道内部缓冲上限       [JSON可调]
-inline int   PIPES_MAX_HOPS         = 100;    // BFS路由最大跳数        [JSON可调]
+// ⚠ PIPES_MAX_HOPS 是**真实跳数（BFS 层数）**上限，不是"BFS 总展开次数"。
+//   旧版误当成总展开次数用，导致 100 格以上的直线管道末端永远收不到货（见 update.md 补丁 P）。
+//   默认 512：足够覆盖任何正常布局；单条**走线**更长时可在 config.json 里调大。
+//   （走线 = 从源头到终端的一段连续管道；与本项相对的是"连通域格数"= PIPES_MAX_EXPAND）
+inline int   PIPES_MAX_HOPS         = 512;    // BFS路由最大跳数(层数)  [JSON可调]
+// 单次 BFS 的**节点展开总数**安全阀：防"全网没有任何容器可收"时每周期做全图遍历卡帧。
+// 正常布局下 BFS 找到最近容器就返回，远用不到这个数。
+inline int   PIPES_MAX_EXPAND       = 8192;   // 单次BFS最大展开格数    [JSON可调]
 inline int   PIPES_PULL_PER_TICK    = 4;      // 每周期每管道可路由物品数 [JSON可调]
 
 // ================= 机器参数 =================

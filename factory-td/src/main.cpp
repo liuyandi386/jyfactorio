@@ -9,6 +9,10 @@
 // 附加命令行参数：
 //   --selftest-save  运行存档往返自检（保存→清空→读档→逐项核对，
 //                    自动备份/恢复玩家存档），退出码 0=全部通过，1=存在失败项
+//   --selftest-ime   运行输入法抑制回归自检（菜单窗口销毁后游戏窗口是否仍被接管；
+//                    HWND 复用是这条路径的历史坑），退出码 0=通过
+//   --selftest-pipe  运行管道长距离传输自检（直线 5~150 格 / 主干+死胡同支路 /
+//                    蛇形 380 格 / 末端无容器时的背压负例），退出码 0=全部通过
 //   --safe-mode      黑屏应急启动：强制 1280×720 窗口化 + 垂直同步
 //                    （不写回 saves/settings.json，下次正常启动仍用原设置）
 //
@@ -28,6 +32,7 @@
 #include "Settings.h"
 #include "ui/EntrySystem.h"
 #include "systems/EnemySystem.h"
+#include "systems/PipeSystem.h"
 #include "systems/MeSystem.h"
 #include "components/Me.h"
 
@@ -311,11 +316,190 @@ int runSelftestSave() {
     return fails == 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------
+// 输入法抑制回归自检
+// ---------------------------------------------------------------------
+// 现场：**无边框全屏 + HWND_TOPMOST** 窗口若不禁用输入法，输入法候选窗/语言栏会与它
+// 互抢 Z 序与前台焦点 → 持续闪屏/黑屏 + 鼠标漂移，整个系统无法操作（v1.3.4 补丁修过一次）。
+// 坑：**HWND 会被系统复用**。主菜单窗口销毁、或玩家在主菜单里切换显示模式让窗口重建后，
+// 游戏窗口很可能拿到同一个句柄值；早期实现用"HWND 值没变"判重，于是游戏窗口被整段跳过、
+// 完全没有防护 → 闪屏复发（v1.3.5 全屏进教程事故）。
+// 本自检按真实顺序走一遍：菜单建窗 → 切换显示模式（重建）→ 销毁 → 游戏建窗，断言游戏
+// 窗口确实已被接管，并打印各窗口句柄（能看出系统是否复用了句柄）。
+int runSelftestIme() {
+    const auto hwndOf = [](sf::RenderWindow& w) {
+        return reinterpret_cast<std::uintptr_t>(w.getSystemHandle());
+    };
+    std::vector<std::uintptr_t> handles;
+    {
+        sf::RenderWindow menu;                     // 等价于 EntrySystem 的窗口
+        gset::applyToWindow(menu, "selftest-menu");
+        handles.push_back(hwndOf(menu));
+        gset::applyToWindow(menu, "selftest-menu");   // 模拟"切换显示模式"→ 同一窗口重建
+        handles.push_back(hwndOf(menu));
+    }                                              // 作用域结束 = 销毁窗口，HWND 归还系统
+
+    Game game(GameMode::Tutorial);                 // 本次事故现场：教程模式全屏窗口
+    handles.push_back(hwndOf(game.window));
+
+    const bool reused = handles[0] == handles[1] || handles[0] == handles[2] ||
+                        handles[1] == handles[2];
+    const bool suppressed = gset::isImeSuppressed(game.window);
+    for (size_t i = 0; i < handles.size(); ++i) {
+        static const char* const kWho[3] = {"菜单窗口", "菜单重建后", "游戏窗口"};
+        std::printf("%s HWND = %llu\n", kWho[i], static_cast<unsigned long long>(handles[i]));
+    }
+    std::printf("HWND 复用：%s\n", reused ? "发生（正是历史事故场景）" : "未发生");
+    std::printf("[%s] 游戏窗口已接管输入法\n", suppressed ? "PASS" : "FAIL");
+    return suppressed ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------
+// 管道长距离传输自检（--selftest-pipe）
+// ---------------------------------------------------------------------
+// 起因（v1.3.5 补丁 P）：BFS 路由把"最大跳数"当成"BFS 总展开次数"用，
+// 直线管道上 BFS 每前进一格就吃掉一次预算 → 100 格左右的长走线末端永远收不到货，
+// 支路/死胡同还会额外吃预算、使实际可达距离更短。本自检把这个静默截断钉死：
+//   ① 直线：5 / 50 / 90 / 99 / 100 / 101 / 110 / 120 / 150 格，全部必须送达；
+//   ② 主干 + 死胡同支路：主干 60 格、3 条 20 格死胡同，末端容器必须照样收到（支路不吃预算）；
+//   ③ 蛇形长链：约 380 格连续管道（远超一屏宽度），必须送达；
+//   ④ 负例：末端没有任何容器时，物品必须**留在管道里**（背压），不许凭空消失。
+// 退出码 0=全部通过，1=存在失败项。
+int runSelftestPipe() {
+    Game game;   // 初始化窗口/资源/地形/矿点
+    int fails = 0;
+    auto report = [&](bool ok, const std::string& name, size_t got, size_t left) {
+        if (!ok) ++fails;
+        std::printf("[%s] %s (收到=%zu 残留=%zu)\n", ok ? "PASS" : "FAIL", name.c_str(), got, left);
+    };
+    // 在 (x,y) 往右铺 len 格管道，末端 (x+len,y) 放储物桶
+    auto buildLine = [&](int x, int y, int len, entt::entity& src, entt::entity& dst) {
+        for (int k = 0; k <= len; ++k)
+            if (!game.canPlace(x + k, y, k == len ? cfg::BuildingType::Bucket
+                                                  : cfg::BuildingType::Pipe)) return false;
+        src = game.placeBuilding(x, y, cfg::BuildingType::Pipe, 0, false);
+        for (int k = 1; k < len; ++k)
+            game.placeBuilding(x + k, y, cfg::BuildingType::Pipe, 0, false);
+        dst = game.placeBuilding(x + len, y, cfg::BuildingType::Bucket, 0, false);
+        return src != entt::null && dst != entt::null;
+    };
+    // 往 src 缓冲塞 1 件铁矿石，跑 steps 个路由周期，返回(桶收到, 管道残留)
+    auto tryRoute = [&](entt::entity src, entt::entity dst, int steps) {
+        game.reg.get<Pipe>(src).buffer.push_back(cfg::ItemType::IronOre);
+        for (int i = 0; i < steps; ++i) PipeSystem::updatePipes(game, 0.3f);
+        const size_t got  = (dst != entt::null && game.reg.valid(dst))
+                                ? game.reg.get<Bucket>(dst).items.size() : 0;
+        const size_t left = game.reg.get<Pipe>(src).buffer.size();
+        return std::pair<size_t, size_t>{got, left};
+    };
+
+    // ---- ① 直线：不同长度（放置失败就换下一行，避开矿点/路径）----
+    const int lens[] = {5, 50, 90, 99, 100, 101, 110, 120, 150};
+    int yCur = 12;
+    for (int len : lens) {
+        entt::entity src = entt::null, dst = entt::null;
+        bool built = false;
+        for (int t = 0; t < 12 && !built; ++t, yCur += 3) {
+            if (yCur >= 66) break;
+            built = buildLine(6, yCur, len, src, dst);
+        }
+        const std::string name = "直线管道 " + std::to_string(len) + " 格";
+        if (!built) { std::printf("[SKIP] %s（没找到足够空地）\n", name.c_str()); continue; }
+        const auto [got, left] = tryRoute(src, dst, 40);
+        report(got > 0, name, got, left);
+    }
+
+    // ---- ② 主干 + 死胡同支路：支路不得吃掉可达距离 ----
+    {
+        const int y = 72, x = 6, trunk = 60, spur = 20;
+        bool free = true;
+        for (int k = 0; k <= trunk && free; ++k)
+            if (!game.canPlace(x + k, y, cfg::BuildingType::Pipe)) free = false;
+        for (int k = 0; k < trunk && free; k += 6)
+            for (int s = 1; s <= spur && free; ++s)
+                if (!game.canPlace(x + k, y + s, cfg::BuildingType::Pipe)) free = false;
+        if (free && !game.canPlace(x + trunk, y, cfg::BuildingType::Bucket)) free = false;
+        if (!free) {
+            std::printf("[SKIP] 主干+支路（没找到足够空地）\n");
+        } else {
+            entt::entity src = game.placeBuilding(x, y, cfg::BuildingType::Pipe, 0, false);
+            for (int k = 1; k < trunk; ++k)
+                game.placeBuilding(x + k, y, cfg::BuildingType::Pipe, 0, false);
+            for (int k = 0; k < trunk; k += 6)
+                for (int s = 1; s <= spur; ++s)
+                    game.placeBuilding(x + k, y + s, cfg::BuildingType::Pipe, 0, false);
+            entt::entity dst = game.placeBuilding(x + trunk, y, cfg::BuildingType::Bucket, 0, false);
+            const auto [got, left] = tryRoute(src, dst, 40);
+            report(got > 0, "主干 60 格 + 3 条 20 格死胡同支路", got, left);
+        }
+    }
+
+    // ---- ③ 蛇形长链：远超一屏宽度的连续管道 ----
+    {
+        std::vector<sf::Vector2i> cells;
+        const int xLo = 6, xHi = 190, yLo = 120, yHi = 178, want = 380;
+        for (int y = yLo, dir = 1; y <= yHi && static_cast<int>(cells.size()) < want; ++y, dir = -dir)
+            for (int x = (dir > 0 ? xLo : xHi);
+                 (dir > 0 ? x <= xHi : x >= xLo) && static_cast<int>(cells.size()) < want; x += dir)
+                cells.emplace_back(x, y);
+        bool free = !cells.empty();
+        for (const auto& c : cells)
+            if (!game.canPlace(c.x, c.y, cfg::BuildingType::Pipe)) free = false;
+        const sf::Vector2i tail{cells.back().x, cells.back().y + 1};
+        if (free && !game.canPlace(tail.x, tail.y, cfg::BuildingType::Bucket)) free = false;
+        if (!free) {
+            std::printf("[SKIP] 蛇形长链（没找到足够空地）\n");
+        } else {
+            entt::entity src = entt::null;
+            for (const auto& c : cells) {
+                const entt::entity e = game.placeBuilding(c.x, c.y, cfg::BuildingType::Pipe, 0, false);
+                if (src == entt::null) src = e;
+            }
+            entt::entity dst = game.placeBuilding(tail.x, tail.y, cfg::BuildingType::Bucket, 0, false);
+            const auto [got, left] = tryRoute(src, dst, 60);
+            report(got > 0, "蛇形连续管道 " + std::to_string(cells.size()) + " 格", got, left);
+        }
+    }
+
+    // ---- ④ 负例：末端没有容器 → 物品必须留下（背压，不许消失）----
+    {
+        const int x = 6, len = 8;
+        entt::entity src = entt::null, dst = entt::null;
+        bool built = false;
+        for (int t = 0; t < 12 && !built; ++t) {
+            const int y = 42 + t * 2;
+            if (y >= 62) break;
+            bool rowFree = true;
+            for (int k = 0; k <= len && rowFree; ++k)
+                if (!game.canPlace(x + k, y, cfg::BuildingType::Pipe)) rowFree = false;
+            if (!rowFree) continue;
+            src = game.placeBuilding(x, y, cfg::BuildingType::Pipe, 0, false);
+            for (int k = 1; k <= len; ++k)
+                game.placeBuilding(x + k, y, cfg::BuildingType::Pipe, 0, false);
+            built = (src != entt::null);
+        }
+        if (!built) {
+            std::printf("[SKIP] 背压负例（没找到空地）\n");
+        } else {
+            const auto [got, left] = tryRoute(src, dst, 20);
+            report(got == 0 && left == 1, "末端无容器时物品留在管道内（背压）", got, left);
+        }
+    }
+
+    std::printf("管道长传输自检: %s\n", fails == 0 ? "全部通过" : "存在失败项");
+    return fails == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     // ⚠ 必须在创建任何窗口之前：开启高 DPI 感知（高刷屏常配 125%/150% 缩放）
     enableHighDpiAwareness();
+
+    // ⚠ 同样必须在建窗之前：进程级禁用输入法。游戏无任何文本输入，而「无边框全屏 +
+    // HWND_TOPMOST」窗口一旦让输入法弹候选窗/语言栏，两者会互抢 Z 序与前台焦点 →
+    // 持续闪屏黑屏、整个系统无法操作（只能切虚拟桌面结束进程）。
+    gset::disableImeForProcess();
 
     // 最先读取用户设置：入口系统与游戏窗口都据此决定显示模式
     // 首次运行（或配置文件损坏）时写入一份默认设置，方便玩家直接编辑
@@ -330,6 +514,10 @@ int main(int argc, char** argv) {
             gset::get().frameMode   = gset::FrameMode::Vsync;
         } else if (a == "--selftest-save") {
             return runSelftestSave();
+        } else if (a == "--selftest-ime") {
+            return runSelftestIme();
+        } else if (a == "--selftest-pipe") {
+            return runSelftestPipe();
         }
     }
 

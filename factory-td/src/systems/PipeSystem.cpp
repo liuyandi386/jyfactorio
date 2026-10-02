@@ -145,48 +145,76 @@ bool deliverItem(Game& g, entt::entity e, cfg::ItemType item) {
 
 // ---- BFS 即时路由（有路径即送达） ----
 // 用版本戳避免每帧分配大数组；路径可穿过管道与分流器（分流器为直通节点）
-std::vector<uint32_t> visited_;
+std::vector<uint32_t> visited_;   // 访问版本戳（免每帧分配）
+std::vector<uint16_t> depth_;     // 该格在本次 BFS 中的层数（= 与出发管道的跳数距离）
 uint32_t stamp_ = 0;
 
-/// 从 (sx,sy) 出发找最近的可接收容器并交付，成功返回true
-bool routeFrom(Game& g, int sx, int sy, cfg::ItemType item) {
+/// 从 (sx,sy) 出发找最近的可接收容器并交付，成功返回 true；hit 回填送达目标（可为空）
+///
+/// ⚠ 两个上限各管一件事，**绝不能混用**（v1.3.5 补丁 P 修的正是这个）：
+///   · cfg::PIPES_MAX_HOPS   = **真实跳数（BFS 层数）**上限；
+///   · cfg::PIPES_MAX_EXPAND = 单次 BFS 的**节点展开总数**安全阀（防全网无容器可收时空转）。
+/// 旧实现写成 `int hops = PIPES_MAX_HOPS; while (!bfs.empty() && hops-- > 0)`——
+/// 把"跳数上限"当成"总出队次数"用了。而一条直线管道上 BFS 每前进一格就要出队一次，
+/// 于是从最远端出发的 BFS 还没摸到末端容器就把 100 次预算用光 →
+/// **100 格左右的管道"铺了却不通"**（用户实机现象）；更糟的是任何支路/死胡同
+/// 都会额外吃掉预算，实际可达距离远小于标称值。
+/// 现在跳数与展开次数分开计：支路不再拖累可达距离，超长**走线**也不会被静默截断。
+/// （术语：走线 = 从源头到终端的一段连续管道；连通域 = BFS 能走到的整片连通管道。
+///   注意物品管道没有"网络"对象，连通域是每次 BFS 现场走出来的——别和 ME 的 MeNetwork 混用。）
+bool routeFrom(Game& g, int sx, int sy, cfg::ItemType item, entt::entity* hit = nullptr) {
     const size_t cellCount = static_cast<size_t>(g.grid.w) * g.grid.h;
-    if (visited_.size() != cellCount) visited_.assign(cellCount, 0);
+    if (visited_.size() != cellCount) {
+        visited_.assign(cellCount, 0);
+        depth_.assign(cellCount, 0);
+    }
     if (++stamp_ == 0) {                       // 戳回绕：清空重来
         std::fill(visited_.begin(), visited_.end(), 0);
         stamp_ = 1;
     }
-    auto mark = [&](int x, int y) {
-        visited_[static_cast<size_t>(y) * g.grid.w + x] = stamp_;
-    };
-    auto isMarked = [&](int x, int y) {
-        return visited_[static_cast<size_t>(y) * g.grid.w + x] == stamp_;
-    };
+    const auto at = [&](int x, int y) { return static_cast<size_t>(y) * g.grid.w + x; };
+    auto mark = [&](int x, int y, uint16_t d) { visited_[at(x, y)] = stamp_; depth_[at(x, y)] = d; };
+    auto isMarked = [&](int x, int y) { return visited_[at(x, y)] == stamp_; };
 
-    mark(sx, sy);
+    mark(sx, sy, 0);
     std::deque<std::pair<int, int>> bfs;
 
-    // 第0跳：直接检查四邻（端点优先）
+    // 第0跳：直接检查四邻（端点优先——贴着管道的容器永远最先中选）
     for (int d = 0; d < 4; ++d) {
         const int nx = sx + cfg::Dir::OFFSETS[d][0];
         const int ny = sy + cfg::Dir::OFFSETS[d][1];
         if (!g.grid.inBounds(nx, ny) || isMarked(nx, ny)) continue;
         const entt::entity nb = neighborAt(g, nx, ny);
-        if (isNetworkNode(g, nb)) { mark(nx, ny); bfs.emplace_back(nx, ny); }
-        else if (acceptsItem(g, nb, item) && deliverItem(g, nb, item)) return true;
+        if (isNetworkNode(g, nb)) { mark(nx, ny, 1); bfs.emplace_back(nx, ny); }
+        else if (acceptsItem(g, nb, item) && deliverItem(g, nb, item)) {
+            if (hit) *hit = nb;
+            return true;
+        }
     }
 
-    int hops = cfg::PIPES_MAX_HOPS;
-    while (!bfs.empty() && hops-- > 0) {
+    // 逐层扩散：只把"层数还没到上限"的节点继续往外扩；
+    // 节点自身仍会检查四邻端点，所以"上限那一层"旁边的容器照样够得着。
+    const uint16_t maxHops = static_cast<uint16_t>(
+        cfg::PIPES_MAX_HOPS > 0 ? cfg::PIPES_MAX_HOPS : 1);
+    int budget = cfg::PIPES_MAX_EXPAND > 0 ? cfg::PIPES_MAX_EXPAND : 1;
+    while (!bfs.empty() && budget-- > 0) {
         const auto [x, y] = bfs.front();
         bfs.pop_front();
-        for (int d = 0; d < 4; ++d) {
-            const int nx = x + cfg::Dir::OFFSETS[d][0];
-            const int ny = y + cfg::Dir::OFFSETS[d][1];
+        const uint16_t d = depth_[at(x, y)];
+        const bool expand = d < maxHops;
+        for (int k = 0; k < 4; ++k) {
+            const int nx = x + cfg::Dir::OFFSETS[k][0];
+            const int ny = y + cfg::Dir::OFFSETS[k][1];
             if (!g.grid.inBounds(nx, ny) || isMarked(nx, ny)) continue;
             const entt::entity nb = neighborAt(g, nx, ny);
-            if (isNetworkNode(g, nb)) { mark(nx, ny); bfs.emplace_back(nx, ny); }
-            else if (acceptsItem(g, nb, item) && deliverItem(g, nb, item)) return true;
+            if (isNetworkNode(g, nb)) {
+                if (!expand) continue;                      // 到跳数上限：不再往外铺
+                mark(nx, ny, static_cast<uint16_t>(d + 1));
+                bfs.emplace_back(nx, ny);
+            } else if (acceptsItem(g, nb, item) && deliverItem(g, nb, item)) {
+                if (hit) *hit = nb;
+                return true;
+            }
         }
     }
     return false;   // 无路可送：物品留在管道缓冲（背压）
@@ -311,11 +339,25 @@ void PipeSystem::updatePipes(Game& g, float dt) {
         p.transferTimer = 0.0f;
 
         int moved = 0;
+        // 同一根管道、同一周期内：同种物品复用上一次的送达目标，省掉重复 BFS。
+        // （旧实现每个物品都从头 BFS 一遍，一个周期最多 4 次；这里降到通常 1 次。
+        //   送达前仍会重新 canAccept 校验，容器中途满了会自动回退到重新寻路。）
+        entt::entity cached = entt::null;
+        cfg::ItemType cachedItem = cfg::ItemType::IronOre;
         while (!p.buffer.empty() && moved < cfg::PIPES_PULL_PER_TICK) {
             const cfg::ItemType item = p.buffer.front();
-            if (!routeFrom(g, b.pos.x, b.pos.y, item)) break;  // 无处可送 → 背压
+            if (cached != entt::null && item == cachedItem &&
+                acceptsItem(g, cached, item) && deliverItem(g, cached, item)) {
+                p.buffer.pop_front();
+                ++moved;
+                continue;
+            }
+            entt::entity dst = entt::null;
+            if (!routeFrom(g, b.pos.x, b.pos.y, item, &dst)) break;  // 无处可送 → 背压
             p.buffer.pop_front();
-            moved++;
+            cached = dst;
+            cachedItem = item;
+            ++moved;
         }
     }
 }

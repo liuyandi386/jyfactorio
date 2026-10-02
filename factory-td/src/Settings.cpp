@@ -247,8 +247,11 @@ SettingActivate activateSettingRow(int row) {
 #ifdef _WIN32
 namespace {
 
-HWND    g_imeHwnd     = nullptr;   // 已接管输入法的窗口（重建窗口后会更新）
-WNDPROC g_imePrevProc = nullptr;   // SFML 原本的窗口过程
+// 最近一次被接管的窗口，它原本的窗口过程。
+// **同一时刻只会有一个受管窗口**（`main.cpp` 里主菜单窗口先销毁、游戏窗口才创建），
+// 所以这里用单个槽位即可；判重看的是"窗口过程是不是已经是我们"，不看 HWND 值——HWND
+// 会被系统复用（见 suppressImeForWindow 注释）。
+WNDPROC g_imePrevProc = nullptr;
 
 // 挂接在窗口过程最外层：吞掉全部输入法消息。
 // 微软拼音（Win10/11）走 TSF，即使不产生 IMM32 的候选窗，也会在被视为"编辑焦点"的
@@ -280,17 +283,47 @@ LRESULT CALLBACK imeSuppressProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 /// 关闭该窗口的输入法（三重保险覆盖 IMM32 与 TSF 两条路径）
 void suppressImeForWindow(sf::RenderWindow& window) {
     const HWND hwnd = static_cast<HWND>(window.getSystemHandle());
-    if (!hwnd || hwnd == g_imeHwnd) return;
+    if (!hwnd) return;
 
-    ::ImmAssociateContext(hwnd, nullptr);   // ① 解绑该窗口的输入法上下文（IMM32）
-    ::ImmDisableIME(0);                     // ② 禁用当前线程的输入法
-    g_imeHwnd = hwnd;                       // ③ 挂窗口过程拦 IME 消息（TSF/微软拼音）
-    g_imePrevProc = reinterpret_cast<WNDPROC>(::SetWindowLongPtrW(
-        hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&imeSuppressProc)));
+    // ①② 每次都重做（幂等）。**HWND 会被系统复用**：主菜单窗口销毁、或玩家在主菜单里
+    //     切换显示模式导致窗口重建后，游戏窗口很可能拿到同一个句柄值，上一代窗口留下的
+    //     输入法关联必须重新清掉，不能因为"句柄没变"就跳过。
+    ::ImmAssociateContext(hwnd, nullptr);   // 解绑该窗口的输入法上下文（IMM32）
+    ::ImmDisableIME(-1);                    // 禁用输入法（-1 = 本进程所有线程）
+
+    // ③ 挂窗口过程拦 IME 消息（TSF/微软拼音）。判重**只能看"这个窗口当前的窗口过程
+    //    是不是已经是我们"**：早期实现比较的是 HWND 值（`hwnd == g_imeHwnd` 就早退），
+    //    于是复用同一句柄的新窗口会被整段跳过、完全不设防 →「无边框全屏 + HWND_TOPMOST」
+    //    与输入法候选窗互抢 Z 序/前台焦点 → 持续闪屏黑屏 + 整个系统卡住
+    //    （v1.3.5 全屏进教程闪屏事故的根因）。
+    const WNDPROC cur = reinterpret_cast<WNDPROC>(::GetWindowLongPtrW(hwnd, GWLP_WNDPROC));
+    if (cur == &imeSuppressProc) return;    // 该窗口已接管；重复挂钩会自我递归
+    g_imePrevProc = cur;
+    ::SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&imeSuppressProc));
 }
 
 } // namespace
 #endif
+
+// ---------------------------------------------------------------------
+// 输入法抑制状态查询（自检用；见 Settings.h）
+// ---------------------------------------------------------------------
+void disableImeForProcess() {
+#ifdef _WIN32
+    ::ImmDisableIME(-1);   // -1 = 本进程所有线程；越早调用越彻底
+#endif
+}
+
+bool isImeSuppressed(sf::RenderWindow& window) {
+#ifdef _WIN32
+    const HWND hwnd = static_cast<HWND>(window.getSystemHandle());
+    return hwnd && reinterpret_cast<WNDPROC>(::GetWindowLongPtrW(hwnd, GWLP_WNDPROC)) ==
+                       &imeSuppressProc;
+#else
+    (void)window;
+    return true;   // 非 Win32 平台不做输入法抑制，视为已处理
+#endif
+}
 
 // ---------------------------------------------------------------------
 // 窗口创建（两个窗口创建点共用唯一策略）
@@ -301,8 +334,26 @@ void applyToWindow(sf::RenderWindow& window, const std::string& titleUtf8) {
     // 模式切换（反复黑屏闪烁的根源）与随之而来的鼠标坐标重映射（鼠标漂移的根源）。
     const sf::Uint32 style = borderless() ? sf::Style::None : sf::Style::Default;
 
-    window.create(sf::VideoMode(static_cast<unsigned>(windowWidth()),
-                                static_cast<unsigned>(windowHeight())),
+    // ⚠ 无边框全屏窗口**必须比桌面小 2 像素**，不能"恰好铺满整个显示器"。
+    // 恰好铺满时 Windows 会把它判定为全屏应用，交给「全屏优化 / 独立翻转
+    // (DirectFlip · MPO)」这条呈现路径；本机（Intel Arc 140T + 2560×1600@144Hz +
+    // Win11 25H2）该路径是坏的：应用侧 window.display() 照常以 144 FPS 返回
+    // （已用打点实测），但**显示器不再更新画面**——屏幕定格在启动动画那一帧，
+    // 任何覆盖上来的东西（输入法候选窗/语言栏、通知、ASUS OSD、音量条）都会强制
+    // 重新合成一次，于是屏幕在「陈旧画面 ↔ 纯黑」之间反复翻转 = 玩家看到的
+    // 疯狂闪屏黑屏；与用哪种输入法无关（换输入法只是又触发一次重新合成）。
+    // 留 2px 余量后 Windows 不再当作"全屏"，画面回到 DWM 合成路径即恢复正常。
+    // 实测对照：2560×1600 → 画面定格；2558×1598 → 3 秒内正常进主菜单。
+    unsigned winW = static_cast<unsigned>(windowWidth());
+    unsigned winH = static_cast<unsigned>(windowHeight());
+#ifdef _WIN32
+    if (borderless()) {
+        winW = (winW > 2u) ? winW - 2u : winW;
+        winH = (winH > 2u) ? winH - 2u : winH;
+    }
+#endif
+
+    window.create(sf::VideoMode(winW, winH),
                   sf::String::fromUtf8(titleUtf8.begin(), titleUtf8.end()), style);
 
 #ifdef _WIN32
@@ -319,7 +370,7 @@ void applyToWindow(sf::RenderWindow& window, const std::string& titleUtf8) {
         // 看起来就是"铺不满 / 露出一条任务栏"。置顶后才是真正的全屏观感。
         // 切回窗口化时窗口会被 create() 重建，不会残留置顶状态。
         ::SetWindowPos(static_cast<HWND>(window.getSystemHandle()), HWND_TOPMOST, 0, 0,
-                       windowWidth(), windowHeight(), SWP_SHOWWINDOW);
+                       static_cast<int>(winW), static_cast<int>(winH), SWP_SHOWWINDOW);
 #endif
     }
 }

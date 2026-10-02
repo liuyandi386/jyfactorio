@@ -73,3 +73,10 @@ factory-td/assets/fonts/*.ttc
 # ---------- AI 协作工具数据 ----------
 # 不想公开 .codebuddy/ 就保留此行；想公开则删掉
 .codebuddy/
+
+# ---------- 本地调试 / GUI 自动化探针产物（一律不入库） ----------
+# _probe_menu.ps1 是"截游戏窗口截图"的本机自动化脚本，_probe_*.png 是它的输出；
+# tutorial_steps.csv 是教程步骤导出表（含源码行号，仅供本机核对）。
+# 三者都只服务于本机验证，不属于游戏内容，也不该出现在任何提交里。
+_probe_*
+tutorial_steps.csv

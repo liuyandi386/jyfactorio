@@ -126,7 +126,8 @@
 
   "pipes_transfer_interval": 0.25,
   "pipes_max_buffer": 16,
-  "pipes_max_hops": 100,
+  "pipes_max_hops": 512,
+  "pipes_max_expand": 8192,
   "pipes_pull_per_tick": 4,
   "bucket_capacity": 99999,
   "bucket_output_interval": 0.5,

@@ -110,6 +110,17 @@ enum class SettingActivate {
 };
 SettingActivate activateSettingRow(int row);
 
+/// 该窗口是否已被"输入法抑制"接管（仅 Win32 有实际意义）。
+/// 用途：`--selftest-ime` 回归自检断言"游戏窗口真的关掉了输入法"——
+/// 这一条没法靠人眼看出来，而 v1.3.4 补丁曾因 HWND 复用整段失效、导致全屏闪屏复发。
+bool isImeSuppressed(sf::RenderWindow& window);
+
+/// 进程级禁用输入法：**必须在创建任何窗口之前调用一次**（main 里紧跟 gset::load()）。
+/// 本工程无任何文本输入（见 ai.md §0.3-7），而「无边框全屏 + HWND_TOPMOST」窗口一旦让
+/// 输入法弹出候选窗/语言栏，两者会互抢 Z 序与前台焦点 → 持续闪屏黑屏、整个系统卡住。
+/// 逐窗口的钩子仍保留（见 applyToWindow），这里是更早、更彻底的一层保险。
+void disableImeForProcess();
+
 /// 按当前显示模式创建/重建窗口（启动菜单窗口与游戏窗口共用，策略只有这一处）。
 ///
 /// - 无边框全屏：Style::None + 桌面尺寸 + 贴到 (0,0)，看起来就是全屏，但**不请求

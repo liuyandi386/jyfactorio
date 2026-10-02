@@ -198,6 +198,7 @@ bool loadConfig(const std::string& path) {
     setIf(PIPES_TRANSFER_INTERVAL, j, "pipes_transfer_interval");
     setIf(PIPES_MAX_BUFFER, j, "pipes_max_buffer");
     setIf(PIPES_MAX_HOPS, j, "pipes_max_hops");
+    setIf(PIPES_MAX_EXPAND, j, "pipes_max_expand");
     setIf(PIPES_PULL_PER_TICK, j, "pipes_pull_per_tick");
     setIf(BUCKET_CAPACITY, j, "bucket_capacity");
     setIf(BUCKET_OUTPUT_INTERVAL, j, "bucket_output_interval");
