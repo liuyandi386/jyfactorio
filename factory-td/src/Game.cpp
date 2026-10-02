@@ -121,6 +121,7 @@ void Game::generateOreDeposits() {
             ok++;
         }
     };
+
     // 8 种矿石：每种独立矿点，随机散布全图
     gen(cfg::ItemType::IronOre, cfg::ORE_IRON_COUNT);
     gen(cfg::ItemType::CopperOre, cfg::ORE_COPPER_COUNT);
@@ -130,6 +131,27 @@ void Game::generateOreDeposits() {
     gen(cfg::ItemType::NickelOre, cfg::ORE_NICKEL_COUNT);
     gen(cfg::ItemType::SilverOre, cfg::ORE_SILVER_COUNT);
     gen(cfg::ItemType::LeadOre, cfg::ORE_LEAD_COUNT);
+
+    // ---- 新手教程：教学区固定矿点（详见 GameConfig.h「新手教程固定布局」）----
+    // 随机矿点先照常铺满全图（世界看起来仍是正常的），再把教学区内的随机矿点清掉、
+    // 钉上 铁/铜/煤。这样即使随机布局恰好让 5×5 范围内缺铜，教程的弹药产线也永远
+    // 跑得起来——旧版 0.6% 的"采矿场只出铁锭、组装机造不出弹药"死锁就此根治。
+    if (mode == GameMode::Tutorial) {
+        const int cx = cfg::TUT_MINER_X, cy = cfg::TUT_MINER_Y;
+        const int r = std::max(1, cfg::MINER_RADIUS_L1);
+        std::vector<entt::entity> wipe;
+        for (auto [e, pos, od] : reg.view<GridPos, OreDeposit>().each())
+            if (pos.x >= cx - r && pos.x <= cx + r &&
+                pos.y >= cy - r && pos.y <= cy + r) wipe.push_back(e);
+        for (auto e : wipe) reg.destroy(e);
+        for (int i = 0; i < cfg::TUT_ORE_COUNT; ++i) {
+            const int x = cfg::TUT_ORE_X[i], y = cfg::TUT_ORE_Y[i];
+            if (!grid.inBounds(x, y)) continue;
+            const auto e = reg.create();
+            reg.emplace<GridPos>(e, x, y);
+            reg.emplace<OreDeposit>(e, cfg::TUT_ORE_T[i], cfg::ORE_DEPOSIT_AMOUNT);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -373,8 +395,8 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
         t == cfg::BuildingType::AlloyFurnace || isMiner)
         power.dirty = true;
 
-    // 新手引导：记录放置（步骤判定 + 错误纠正）
-    tutorial::onBuildingPlaced(*this, t);
+    // 新手引导：记录放置（步骤判定 + 错误纠正 + 固定建造位校验）
+    tutorial::onBuildingPlaced(*this, t, {tx, ty});
     // 叙事层：第一座建筑落成（仅普通关卡；教程模式由旁白负责）
     narrative::announceOnce(*this, narrative::Event::FirstBuild);
     return e;
@@ -853,6 +875,23 @@ void Game::updateHoverTooltip() {
         setTip(std::string(cfg::BUILDING_INFOS[static_cast<size_t>(b.type)].nameZh),
                {stat, "网络内物品全局共享，右键查看清单"});
         return;
+    }
+
+    // 矿点悬停：显示矿种名称与剩余储量（矿点铺在地面上，1 格 1 个）
+    //   刻意放在所有建筑检测之后：采矿场等建筑压在矿点上时仍然优先显示建筑信息，
+    //   露天矿点才回落到这里。悬停不改变 hoveredEntity（那是"建筑"实体，渲染射程圈用）。
+    {
+        const sf::Vector2i t = tileAt(world);
+        if (grid.inBounds(t.x, t.y)) {
+            for (auto [e, pos, ore] : reg.view<GridPos, OreDeposit>().each()) {
+                if (pos.x != t.x || pos.y != t.y) continue;
+                setTip(std::string(ItemSystem::nameZh(ore.type)) + "（矿点）", {
+                    "储量: " + (cfg::ORE_INFINITE ? std::string("∞（无限开采）")
+                                                  : std::to_string(ore.amount)),
+                    "提示: 采矿场覆盖范围内开采"});
+                return;
+            }
+        }
     }
 
     // 敌人悬停（只显示血条，不显示提示面板，Python行为）

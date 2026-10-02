@@ -128,6 +128,22 @@ inline constexpr std::array<ItemType, 8> ORE_TYPES = {
     ItemType::IronOre, ItemType::CopperOre, ItemType::Coal, ItemType::GoldOre,
     ItemType::DiamondOre, ItemType::NickelOre, ItemType::SilverOre, ItemType::LeadOre};
 
+// ================= 新手教程固定布局（教学区） =================
+// 教程模式会在"教学区"里强制写入 铁/铜/煤 三种矿点（并清掉区内的随机矿点）。
+//
+// 原因：旧版教程完全依赖随机矿点，而随机布局存在约 0.6% 的概率让采矿场 5×5 范围内缺铜——
+// 采矿场只出铁锭，组装机永远压不出弹药，第四章的"首次击杀"直接死锁。把三种矿点钉死在
+// 采矿场脚下，同时保证第 4 章"首次击杀"与第 5 章"煤 → 燃煤发电机"必然可解。
+//   采矿场固定落位 (110,92)；矿点在它四邻斜角，半径1(3×3)的矿机都能覆盖。
+//   教学区在路径 y=80 下方约 10 格：开局摄像机对准这里，炮塔抬到路径边即可覆盖。
+inline constexpr int TUT_MINER_X = 110;   // 教程固定采矿场格 X
+inline constexpr int TUT_MINER_Y = 92;    // 教程固定采矿场格 Y
+inline constexpr int TUT_ORE_COUNT = 4;   // 教学区预置矿点数量
+inline constexpr int TUT_ORE_X[TUT_ORE_COUNT] = {109, 111, 109, 111};
+inline constexpr int TUT_ORE_Y[TUT_ORE_COUNT] = { 91,  91,  93,  93};
+inline constexpr ItemType TUT_ORE_T[TUT_ORE_COUNT] = {
+    ItemType::IronOre, ItemType::CopperOre, ItemType::Coal, ItemType::IronOre};
+
 // 物品注册表：中文名 / 缩写符号 / 显示颜色 / 是否可由传送带运输
 struct ItemInfo {
     const char* nameZh;      // 中文名

@@ -12,6 +12,7 @@
 #include "Game.h"
 #include "ui/GameUI.h"
 #include "components/Building.h"
+#include "components/Power.h"
 
 using nlohmann::json;
 
@@ -36,7 +37,9 @@ constexpr float MISTAKE_COOLDOWN = 2.5f;
 /// 教学脚本版本：新增/重排步骤后必须 +1。
 /// 旧进度文件按 step 索引续接，脚本一改索引就错位（会跳到不相干的步骤）——
 /// 版本不匹配时丢弃旧进度从头教起（新手教程的进度没有保留价值，重置无副作用）。
-constexpr int SCRIPT_VERSION = 2;
+constexpr int SCRIPT_VERSION = 4;
+/// PowerOn 步骤的轮询/诊断间隔（秒）：太密会刷屏，太疏玩家不知道卡在哪
+constexpr float POWER_POLL_INTERVAL = 4.0f;
 
 // ---------------- 文件级动画计时器（进程内单例，无需持久化） ----------------
 float g_time = 0.0f;             // 累计时间（脉冲动画）
@@ -45,6 +48,7 @@ float g_mistakeFlash = 0.0f;     // 误操作红框剩余时间
 float g_mistakeCooldown = 0.0f;  // 误操作提示冷却
 float g_lastCamX = 0.0f, g_lastCamY = 0.0f;
 bool g_hasLastCam = false;
+float g_powerPoll = 0.0f;        // PowerOn 步骤的下一轮诊断倒计时
 
 // ---------------- 绘制小工具 ----------------
 void drawStr(sf::RenderTarget& rt, const sf::Font& font, const std::string& s,
@@ -83,6 +87,75 @@ sf::FloatRect buildingScreenRect(Game& g, entt::entity e) {
     return {tl.x, tl.y, b.w * cfg::TILE_SIZE * z, b.h * cfg::TILE_SIZE * z};
 }
 
+/// 某一格（含占地尺寸）在屏幕上的矩形 —— 用于高亮"固定建造位"（Step::targetTile）。
+/// 世界里的空地和已建成的建筑都要能高亮，所以这里不能走 findFirst。
+sf::FloatRect tileScreenRect(Game& g, sf::Vector2i t, cfg::BuildingSize sz) {
+    const sf::Vector2f tl = g.worldToScreen(g.tileWorld(t));
+    const float z = g.camera.zoom;
+    return {tl.x, tl.y, sz.w * cfg::TILE_SIZE * z, sz.h * cfg::TILE_SIZE * z};
+}
+
+/// 「可跳过」判定（Step::optional）：该步的"目的"是否已经被玩家顺手达成了。
+/// 目前只对放置类步骤有意义，按建筑分派：
+///   · 物品管道 —— 上游机器（采矿场/熔炉）的输出面已经直接贴着可接收的建筑，
+///                  物料根本不经过管道就能交接，这一步自然不必再做。
+///   · 其它建筑 —— 世界里已经有同种建筑（重复放置没有意义）。
+/// 判定是"宽松"的：宁可少拦一次，也不要让玩家卡在一个已经做完的步骤上。
+bool goalAlreadyMet(Game& g, const Step& st) {
+    using B = cfg::BuildingType;
+    if (st.building == B::Pipe) {
+        for (auto [e, b, m, fc] : g.reg.view<Building, Machine, FaceConfig>().each()) {
+            if (m.kind != MachineKind::Miner && m.kind != MachineKind::Furnace) continue;
+            for (int d = 0; d < 4; ++d) {
+                if (fc.get(d) != cfg::FaceMode::OUTPUT) continue;
+                const int nx = b.pos.x + cfg::Dir::OFFSETS[d][0];
+                const int ny = b.pos.y + cfg::Dir::OFFSETS[d][1];
+                for (auto [e2, b2] : g.reg.view<Building>().each()) {
+                    if (e2 == e) continue;
+                    if (b2.pos.x == nx && b2.pos.y == ny) return true;
+                }
+            }
+        }
+        return false;
+    }
+    return findFirst(g, st.building) != entt::null;
+}
+
+/// 世界里是否已有"真的通上电"的指定用电设备（Task::PowerOn 的唯一判定条件）
+bool poweredConsumer(Game& g, cfg::BuildingType t) {
+    for (auto [e, b, pc] : g.reg.view<Building, PowerConsumer>().each())
+        if (b.type == t && pc.powered) return true;
+    return false;
+}
+
+/// 诊断"电为什么没通"：返回一句指向具体断点的纠正提示。
+/// 第五章要的是真闭环，所以提示必须落到 发电 / 送煤 / 架线 三个可操作的断点上，
+/// 而不是笼统地说"电力塔没通电"。
+std::string powerDiagnosis(Game& g) {
+    using B = cfg::BuildingType;
+    bool hasGen = false, genRunning = false;
+    for (auto e : g.reg.view<PowerGeneratorNode>()) {
+        hasGen = true;
+        if (g.reg.get<PowerGeneratorNode>(e).running) genRunning = true;
+    }
+    if (!hasGen) return "还没有『燃煤发电机』——先按 0 放一台。";
+    if (!genRunning) return "燃煤发电机没有在发电：用『物品管道』把煤送进发电机。";
+
+    for (auto [e, b] : g.reg.view<Building>().each()) {
+        if (b.type != B::TowerElectric || !g.reg.all_of<PowerConsumer>(e)) continue;
+        for (const auto& net : g.power.networks) {
+            bool inNet = false;
+            for (auto c : net.consumers) if (c == e) inNet = true;
+            if (!inNet) continue;
+            if (net.generators.empty())
+                return "『电力线缆』没把发电机接到电力塔上：按 = 铺线，一格接一格不能断。";
+            return "发电量不足，电网供电不够：多放一台发电机或减少用电设备。";
+        }
+        return "电力塔还不在任何电网上：按 = 用『电力线缆』从发电机一路铺到塔脚下。";
+    }
+    return "还没有『电力塔』——先按 2 放一座。";
+}
+
 /// 世界区域（右边界为右侧面板左边缘）
 float worldAreaWidth(Game& g) {
     return static_cast<float>(g.window.getSize().x) - cfg::ui::SIDE_PANEL_WIDTH;
@@ -114,13 +187,17 @@ void toast(Game& g, const std::string& msg) {
 }
 
 /// 记录一次误操作并给出纠正提示（带冷却）
-void recordMistake(Game& g, const char* msg) {
-    if (!msg || !*msg) return;
+void recordMistake(Game& g, const std::string& msg) {
+    if (msg.empty()) return;
     if (g_mistakeCooldown > 0.0f) return;
     g.tutorial.mistakes++;
     g_mistakeCooldown = MISTAKE_COOLDOWN;
     g_mistakeFlash = 1.6f;
     toast(g, std::string("✗ ") + msg);
+}
+void recordMistake(Game& g, const char* msg) {
+    if (!msg || !*msg) return;
+    recordMistake(g, std::string(msg));
 }
 
 /// 完成当前步骤并推进
@@ -139,6 +216,7 @@ void completeStep(Game& g) {
     s.stepElapsed = 0.0f;
     s.moveAccum = 0.0f;
     s.justAdvanced = true;
+    g_powerPoll = 0.0f;   // 新步骤的"电为什么没通"诊断重新计时
 
     if (s.step >= stepCount()) {
         finish(g);
@@ -157,8 +235,8 @@ void completeStep(Game& g) {
 const char* chapterName(Chapter c) {
     switch (c) {
         case Chapter::Basics:     return "第一章 · 观察与移动";
-        case Chapter::Production: return "第二章 · 建造与生产";
-        case Chapter::Logistics:  return "第三章 · 物流与冶炼";
+        case Chapter::Production: return "第二章 · 建造与冶炼";
+        case Chapter::Logistics:  return "第三章 · 物流与加工";
         case Chapter::Defense:    return "第四章 · 防御与战斗";
         case Chapter::Power:      return "第五章 · 电力网络";
         case Chapter::Automation: return "第六章 · 自动化与进阶";
@@ -175,6 +253,10 @@ const std::vector<Step>& script() {
     using C = Chapter;
     using T = Task;
     using B = cfg::BuildingType;
+    // 教程地图在教学区强制预置了 铁/铜/煤 三种矿点（见 GameConfig.h「新手教程固定布局」），
+    // 所以采矿场必须落在这一格——放偏了就退回"随机矿点缺铜 → 组装机造不出弹药"的老坑。
+    static const sf::Vector2i kMinerTile{cfg::TUT_MINER_X, cfg::TUT_MINER_Y};
+
     static const std::vector<Step> kScript = {
         // ---------- 第一章 · 观察与移动 ----------
         {C::Basics, "建立通讯", "——",
@@ -183,66 +265,68 @@ const std::vector<Step>& script() {
          "通讯已建立", "", T::ReadNarration, B::TowerBasic, 1, 6.0f},
 
         {C::Basics, "熟悉视角", "W A S D 移动镜头 · 滚轮缩放",
-         "织女星：先熟悉视角。W A S D 移动镜头，滚轮拉近拉远。矿脉就在这片区域里。",
+         "织女星：先熟悉视角。W A S D 移动镜头，滚轮拉近拉远。"
+         "镜头正对着我选定的矿脉，闪烁标记的那一格就是我们的起家点。",
          "视角操作已掌握", "请用 W / A / S / D 移动镜头。", T::MoveCamera, B::TowerBasic, 1, 0.0f},
 
-        {C::Basics, "选中采矿场", "点击右侧面板『采矿场』· 或按 3",
-         "织女星：第一步，把『采矿场』拿到手里。它负责把整片矿脉变成我们的原料。",
-         "已选中采矿场", "现在还不需要别的建筑——先选中『采矿场』。",
+        // ---------- 第二章 · 建造与冶炼 ----------
+        {C::Production, "选中采矿场1级", "点击右侧面板『采矿场1级』· 或按 3",
+         "织女星：第一步，把『采矿场1级』拿到手里。它负责把整片矿脉变成我们的原料。",
+         "已选中采矿场1级", "现在还不需要别的建筑——先选中『采矿场1级』（快捷键 3）。",
          T::SelectBuilding, B::Miner, 1, 0.0f},
 
-        // ---------- 第二章 · 建造与生产 ----------
-        {C::Production, "放下第一座采矿场", "鼠标左键 放置",
-         "织女星：矿脉就在脚下。放下采矿场，它会自动开采范围内的所有矿石。",
-         "采矿场已就位，矿石开始流入", "这一步只需要『采矿场』。",
-         T::PlaceBuilding, B::Miner, 1, 0.0f},
+        {C::Production, "放下第一座采矿场1级", "左键放在闪烁标记的矿点上",
+         "织女星：矿脉就在脚下。放在我标出来的那一格——那一格周围我探明了铁、铜、煤三种矿，"
+         "一条产线要用的原料就齐了。",
+         "采矿场1级已就位，矿石开始流入",
+         "请把『采矿场1级』放在闪烁标记的那一格上，那里才是三种矿的交汇点。",
+         T::PlaceBuilding, B::Miner, 1, 0.0f, false, kMinerTile},
 
-        {C::Production, "炼制第一块铁锭", "按 6 选熔炉 → 左键放置",
-         "织女星：原矿不能直接交付。再放一台熔炉，把矿石炼成铁锭。",
+        {C::Production, "炼制第一块铁锭", "按 6 选熔炉 → 左键放置 · 弹窗里选输出面",
+         "织女星：原矿不能直接交付。再放一台熔炉，把矿石炼成铁锭。"
+         "放下时弹出的方向窗口就是『输出面』——产物从那一面吐出来，"
+         "所以输出面要朝着你接下来要接的物品管道。",
          "熔炉已就位", "这一步需要『熔炉』（快捷键 6）。",
          T::PlaceBuilding, B::Furnace, 1, 0.0f},
 
-        // ---------- 第三章 · 物流与冶炼 ----------
-        {C::Logistics, "接通物流", "按 4 选管道 → 放在采矿场与熔炉之间",
-         "织女星：用管道把采矿场和熔炉连起来，矿石就会自己走进熔炉——"
-         "这就是产线的第一口气。",
-         "物流已打通", "这一步需要『管道』（快捷键 4），放在采矿场与熔炉之间。",
-         T::PlaceBuilding, B::Pipe, 1, 0.0f},
+        // ---------- 第三章 · 物流与加工 ----------
+        {C::Logistics, "接通物流", "按 4 选物品管道 → 贴在采矿场1级的输出面上",
+         "织女星：用物品管道把采矿场1级和熔炉连起来，矿石就会自己走进熔炉——"
+         "这就是产线的第一口气。物品管道不用配方向，贴上四邻就自动连通。",
+         "物流已打通",
+         "这一步需要『物品管道』（快捷键 4），放在采矿场1级与熔炉之间；"
+         "如果熔炉已经紧贴着采矿场1级的输出面，这一步会自动跳过去。",
+         T::PlaceBuilding, B::Pipe, 1, 0.0f, true},
 
-        {C::Logistics, "调整输出面", "右键点击你放下的采矿场",
-         "织女星：右键点击采矿场会打开设置面板——可以旋转输出面，也能切换采集模式。"
-         "对准管道，物流会更顺。",
-         "采矿场设置已打开", "请右键点击你已经放下的那座采矿场。",
-         T::RightClickBuilding, B::Miner, 1, 0.0f},
-
-        {C::Logistics, "造出第一批弹药", "按 7 选组装机 → 放在熔炉旁 · 方向朝管道",
+        {C::Logistics, "造出第一批弹药", "按 7 选组装机 → 放在熔炉旁",
          "织女星：铁锭打不死东西，炮塔吃的是弹药。组装机把 2 份铁锭 + 1 份铜锭压成 1 发弹药——"
-         "放到熔炉旁，输出方向对准产线。",
+         "放到熔炉旁，输出面按同样的规矩对准产线。",
          "组装机已就位 · 默认配方就是弹药",
-         "这一步需要『组装机』（快捷键 7），放在熔炉旁边并选好输出方向。",
+         "这一步需要『组装机』（快捷键 7），放在熔炉旁边。",
          T::PlaceBuilding, B::Assembler, 1, 0.0f},
 
-        {C::Logistics, "给组装机供料", "按 4 选管道 → 连起熔炉与组装机",
-         "织女星：再补一段管道，把熔炉出的锭送进组装机。熔炉会在铁锭与铜锭之间自动轮换，"
+        {C::Logistics, "给组装机供料", "按 4 选物品管道 → 连起熔炉与组装机",
+         "织女星：再补一段物品管道，把熔炉出的锭送进组装机。熔炉会在铁锭与铜锭之间自动轮换，"
          "两种锭都会自己送过来。",
          "组装机已接入原料",
-         "这一步需要『管道』（快捷键 4），放在熔炉与组装机之间；"
-         "若组装机迟迟没有原料，右键熔炉把它的输出面转向管道。",
+         "这一步需要『物品管道』（快捷键 4），放在熔炉与组装机之间；"
+         "若组装机迟迟没有原料，多半是前面输出面选错了——拆掉重放一次最省事。",
          T::PlaceBuilding, B::Pipe, 1, 0.0f},
 
         // ---------- 第四章 · 防御与战斗 ----------
-        {C::Defense, "架起防线", "按 1 选基础炮塔 → 放在路径旁",
-         "织女星：雷达上出现热源。本地生物对我们挖矿有点意见——在它们的必经之路旁架一座炮塔。"
+        {C::Defense, "架起防线", "按 1 选基础塔 → 放在路径旁",
+         "织女星：雷达上出现热源。本地生物对我们挖矿有点意见——在它们的必经之路旁架一座基础塔。"
+         "路径就是北边那条深色大道，塔要贴着路边放才够得着。"
          "注意：炮塔出厂时弹仓是空的，它只认弹药。",
-         "炮塔已架设 · 弹仓待供弹", "这一步需要『基础炮塔』（快捷键 1），放在敌人路径旁边。",
+         "基础塔已架设 · 弹仓待供弹", "这一步需要『基础塔』（快捷键 1），放在敌人路径旁边。",
          T::PlaceBuilding, B::TowerBasic, 1, 0.0f},
 
-        {C::Defense, "打通弹药线", "按 4 选管道 → 连起组装机与炮塔",
-         "织女星：最后一段管道。组装机出的弹药会顺着管道直接进炮塔的弹仓，"
+        {C::Defense, "打通弹药线", "按 4 选物品管道 → 连起组装机与基础塔",
+         "织女星：最后一段物品管道。组装机出的弹药会顺着物品管道直接进炮塔的弹仓，"
          "接上之后，这条防线就不再缺弹。",
          "弹药产线已贯通",
-         "这一步需要『管道』（快捷键 4），连在组装机与炮塔之间；"
-         "若弹药送不过去，检查组装机的输出方向是否朝着管道。",
+         "这一步需要『物品管道』（快捷键 4），连在组装机与基础塔之间；"
+         "若弹药送不过去，说明组装机的输出面没朝产线——拆掉重放一次最省事。",
          T::PlaceBuilding, B::Pipe, 1, 0.0f},
 
         {C::Defense, "召唤一次演练", "按 Z 生成一个普通敌人",
@@ -252,21 +336,49 @@ const std::vector<Step>& script() {
         {C::Defense, "首次击杀", "让炮塔开火 · 按 X / C 可加大考验",
          "织女星：看好了——弹药从产线自己送上去，炮塔自己索敌。这条防线，就是我们安心扩张的前提。",
          "首次击杀完成！",
-         "炮塔弹仓还是空的：确认组装机在造弹药、管道接到了炮塔；若熔炉只出铁锭，"
-         "右键采矿场换个采集范围。",
+         "炮塔弹仓还是空的：确认组装机在造弹药、物品管道接到了炮塔。",
          T::KillEnemy, B::TowerBasic, 1, 0.0f},
 
         // ---------- 第五章 · 电力网络 ----------
+        // 这一章是"真闭环"：最后一步不是"放下线缆就算过"，而是轮询电力塔是否真的
+        // 通上了电（发电 → 线缆 → 设备 全链路），所以步骤之间必须把三件事都教到。
         {C::Power, "接入电力", "按 0 选燃煤发电机 → 左键放置",
-         "织女星：炮塔靠弹药，工厂靠电。放一台燃煤发电机——记得喂它煤。",
-         "发电机已就位", "这一步需要『燃煤发电机』（快捷键 0）。",
+         "织女星：炮塔靠弹药，工厂靠电。放一台燃煤发电机——它烧煤发电，32EU/秒，"
+         "是整套电力网络的心脏。",
+         "燃煤发电机已就位 · 尚未点火",
+         "这一步需要『燃煤发电机』（快捷键 0）。",
          T::PlaceBuilding, B::PowerGenerator, 1, 0.0f},
 
-        {C::Power, "架设电网", "按 9 选电线杆 → 从发电机引出电线",
-         "织女星：电不会自己长脚。用电线杆把电从发电机引出来——"
-         "基础炮塔吃弹药不吃电，等换上电力塔，直接接这根杆子就行。",
-         "电网已连通", "这一步需要『电线杆』（快捷键 9），放在发电机旁边。",
-         T::PlaceBuilding, B::PowerPole, 1, 0.0f},
+        {C::Power, "架起电力塔", "按 2 选电力塔 → 放在敌人路径旁",
+         "织女星：电力塔不用弹药，通上电就能一直开火，比基础塔省心，但也更费电。"
+         "把它架在路径旁边，和基础塔形成交叉火力。",
+         "电力塔已架设 · 等待供电",
+         "这一步需要『电力塔』（快捷键 2），放在敌人路径旁边。",
+         T::PlaceBuilding, B::TowerElectric, 1, 0.0f},
+
+        // 注意这两步的顺序：线缆与管道都要铺很多格，把"要铺一串"的步骤依次排在
+        // 只认本步建筑的进度计数之后，玩家多铺几格时就落在同一步里（不算误操作）；
+        // 最后一步 PowerOn 完全不检查建筑放置，所以整章不会因为"多铺了一格"而报错。
+        {C::Power, "架设电网", "按 = 选电力线缆 → 一格一格铺，连起发电机与电力塔",
+         "织女星：电不会隔着空气跳过去。用电力线缆把燃煤发电机和电力塔连成一串——"
+         "一格接一格，中间不能断开。线缆四面默认全通，不需要配方向。",
+         "电网已铺设",
+         "这一步需要『电力线缆』（快捷键 =），中途不能改用别的建筑接线。",
+         T::PlaceBuilding, B::PowerWire, 1, 0.0f},
+
+        {C::Power, "给发电机运煤", "按 4 选物品管道 → 从采矿场1级接到燃煤发电机",
+         "织女星：发电机认煤不认别的。用物品管道把采矿场1级和燃煤发电机连起来——"
+         "我探的那片矿里就有煤，采出来会顺着物品管道自己送进炉膛。",
+         "煤已上路 · 发电机即将点火",
+         "这一步需要『物品管道』（快捷键 4），接在采矿场1级与燃煤发电机之间。",
+         T::PlaceBuilding, B::Pipe, 1, 0.0f},
+
+        {C::Power, "接通电源", "——",
+         "织女星：最后一步，等电接通。发电机烧煤 → 线缆送电 → 电力塔上线。"
+         "这条链上任何一环断了，塔就只是一根铁柱子；断在哪一环，我会看着告诉你。",
+         "电力塔已通电 · 电力网络正式上线！",
+         "",
+         T::PowerOn, B::TowerElectric, 1, 0.0f},
 
         // ---------- 第六章 · 自动化与进阶 ----------
         {C::Automation, "打开说明书", "按 H 或 F1",
@@ -315,6 +427,13 @@ void begin(Game& g) {
     g_hasLastCam = false;
     g_advanceFlash = 0.0f;
     g_mistakeFlash = 0.0f;
+    g_powerPoll = 0.0f;
+    // 教程地图是固定布局（矿点钉在 TUT_MINER_X/Y，见 GameConfig.h），所以开局就把镜头
+    // 摆到教学区上方一点：目标格与北边的敌人路径（y=80）一屏之内都能看到，玩家不必先找地方。
+    g.camera.x = g.camera.targetX =
+        (static_cast<float>(cfg::TUT_MINER_X) + 0.5f) * cfg::TILE_SIZE;
+    g.camera.y = g.camera.targetY =
+        (static_cast<float>(cfg::TUT_MINER_Y) - 2.0f) * cfg::TILE_SIZE;
     // 引导只在"没有存档"的新档自动开启；手动重开时提示一下
     toast(g, "新手引导已开启 · F2 可跳过");
 }
@@ -367,9 +486,31 @@ void update(Game& g, float dt) {
 
     const Step& st = cur(s);
     // 阅读型步骤：计时到点自动前进
+    // （每条分支 completeStep 后立即 return：st 还指着旧步骤，继续往下跑会重复推进）
     if (st.task == Task::ReadNarration && st.autoSeconds > 0.0f &&
         s.stepElapsed >= st.autoSeconds) {
         completeStep(g);
+        return;
+    }
+
+    // 可跳过步骤：目的已被玩家顺手达成 → 直接放行，不逼玩家重复一遍
+    if (st.task == Task::PlaceBuilding && st.optional && goalAlreadyMet(g, st)) {
+        completeStep(g);
+        return;
+    }
+
+    // 通电步骤：轮询"用电设备是否真的通上了电"（真闭环，而不是"放下线缆就算过"）。
+    // 没通电就按 POWER_POLL_INTERVAL 给一次诊断，指出断在 发电/送煤/架线 的哪一环。
+    if (st.task == Task::PowerOn) {
+        if (poweredConsumer(g, st.building)) {
+            completeStep(g);
+            return;
+        }
+        g_powerPoll += dt;
+        if (g_powerPoll >= POWER_POLL_INTERVAL) {
+            g_powerPoll = 0.0f;
+            recordMistake(g, powerDiagnosis(g));
+        }
     }
 }
 
@@ -411,12 +552,22 @@ void onBuildingSelected(Game& g, cfg::BuildingType t) {
     }
 }
 
-void onBuildingPlaced(Game& g, cfg::BuildingType t) {
+void onBuildingPlaced(Game& g, cfg::BuildingType t, sf::Vector2i tile) {
     State& s = g.tutorial;
     if (!s.active) return;
     const Step& st = cur(s);
     if (st.task != Task::PlaceBuilding) return;
     if (t != st.building) {
+        // 玩家可能还在补上一步的同类建筑：线缆/管道往往要铺一长串，本步只按"放下第一段"
+        // 计数通过，剩下的格子必然落在下一步里。这种情况不算误操作，直接忽略，
+        // 否则玩家每多铺一格就被纠正一次。
+        if (s.step > 0 && script()[static_cast<size_t>(s.step - 1)].building == t) return;
+        recordMistake(g, st.mistake);
+        return;
+    }
+    // 固定建造位：只认这一格。教程的矿点是钉死的，采矿场放偏了这一格就是白放
+    // （放偏的地方没有铁/铜/煤，玩家会以为"教程让我挖矿却挖不出东西"）。
+    if (st.targetTile.x >= 0 && tile.x >= 0 && tile != st.targetTile) {
         recordMistake(g, st.mistake);
         return;
     }
@@ -479,6 +630,11 @@ bool hasHighlight(Game& g) {
 sf::FloatRect highlightRect(Game& g) {
     if (!hasHighlight(g)) return {};
     const Step& st = cur(g.tutorial);
+
+    // 固定建造位（Step::targetTile）优先级最高：直接标世界里的那一格。
+    // 教程的矿点是钉死的，玩家必须看见"放哪一格"，而不是右侧面板。
+    if (st.targetTile.x >= 0)
+        return tileScreenRect(g, st.targetTile, cfg::buildingSize(st.building));
 
     // 世界里已有目标建筑 → 高亮世界中的它；否则高亮右侧面板的按钮
     // 注意：只有"右键"类步骤才高亮世界里的旧建筑——"放置"类步骤一律高亮右侧面板按钮，
@@ -560,7 +716,10 @@ void drawOverlay(Game& g, sf::RenderTarget& rt) {
     const float tx = b.left + 16.0f;
     drawStr(rt, font, chapterName(st.chapter), 13, {tx, b.top + 8.0f}, C_DIM);
     drawStr(rt, font, st.title, 19, {tx, b.top + 26.0f}, C_TEXT, false, true);
-    drawStr(rt, font, st.keys, 15, {tx, b.top + 54.0f}, C_ACCENT);
+    // 可跳过步骤给个明示，玩家才知道"熔炉贴脸时这步会自己过"
+    const std::string keysLine =
+        std::string(st.keys ? st.keys : "") + (st.optional ? "　（此步可跳过）" : "");
+    drawStr(rt, font, keysLine, 15, {tx, b.top + 54.0f}, C_ACCENT);
     // 进度
     drawStr(rt, font, "进度 " + std::to_string(s.step + 1) + " / " + std::to_string(stepCount()),
             13, {b.left + b.width - 16.0f, b.top + 8.0f}, C_DIM, false);

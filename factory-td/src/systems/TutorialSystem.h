@@ -40,8 +40,8 @@ namespace tutorial {
 // ---------------------------------------------------------------------
 enum class Chapter : uint8_t {
     Basics,      // 第一章 · 观察与移动
-    Production,  // 第二章 · 建造与生产
-    Logistics,   // 第三章 · 物流与冶炼
+    Production,  // 第二章 · 建造与冶炼（采矿场/熔炉都在这一章，名实相符）
+    Logistics,   // 第三章 · 物流与加工（物品管道连线 + 组装机加工）
     Defense,     // 第四章 · 防御与战斗
     Power,       // 第五章 · 电力网络
     Automation,  // 第六章 · 自动化与进阶
@@ -63,6 +63,7 @@ enum class Task : uint8_t {
     SpawnEnemy,         // 手动生成敌人（Z/X/C/U）
     KillEnemy,          // 击杀至少 count 个敌人
     OpenHelp,           // 打开说明书（H / F1）
+    PowerOn,            // 接入电网：用电设备真的通上了电（发电→线缆→设备全链路接通）
     Finish              // 引导结束
 };
 
@@ -78,6 +79,13 @@ struct Step {
     cfg::BuildingType building = cfg::BuildingType::TowerBasic;  // 关联建筑
     int count = 1;               // 需要的次数
     float autoSeconds = 0.0f;    // ReadNarration 自动前进秒数
+    // ---- 可选 / 定位 ----
+    /// true = 本步允许"目的已达成即通过"（判定见 goalAlreadyMet）：
+    /// 玩家上一步顺手做掉了这件事时不再要求重复操作（如熔炉直接贴着采矿场输出面）。
+    bool optional = false;
+    /// 非负 = 本步只认这一格（用于固定建造位，如教程预置矿点上的采矿场），
+    /// 同时作为高亮目标；(-1,-1) = 不限位置。
+    sf::Vector2i targetTile{-1, -1};
 };
 
 /// 引导进度（仅新手教程模式使用；镜像到独立的 saves/tutorial.json）
@@ -121,7 +129,8 @@ void finish(Game& g);
 // ---------------------------------------------------------------------
 void onKey(Game& g, sf::Keyboard::Key k);
 void onBuildingSelected(Game& g, cfg::BuildingType t);
-void onBuildingPlaced(Game& g, cfg::BuildingType t);
+/// tile = 实际落位的格子（用于 Step::targetTile 校验；未知时传 (-1,-1)）
+void onBuildingPlaced(Game& g, cfg::BuildingType t, sf::Vector2i tile = {-1, -1});
 void onRightClickBuilding(Game& g, cfg::BuildingType t);
 void onEnemyKilled(Game& g, int n = 1);
 /// 摄像机本帧位移（像素），用于 MoveCamera 判定
