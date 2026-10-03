@@ -15,7 +15,8 @@ enum class MachineKind : uint8_t {
     Miner,        // 采矿机
     Furnace,      // 熔炉（矿石→锭，数据驱动配方 FURNACE_RECIPES）
     AlloyFurnace, // 合金炉（锭→合金，数据驱动配方 ALLOY_RECIPES）
-    Assembler     // 组装机（数据驱动配方 ASSEMBLER_RECIPES）
+    Assembler,    // 组装机（数据驱动配方 ASSEMBLER_RECIPES）
+    Generator     // 燃煤发电机（无物品配方；只接收煤作燃料，见 PipeSystem::wantedInputs）
 };
 
 /// 生产机器组件

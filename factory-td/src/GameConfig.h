@@ -18,7 +18,7 @@ namespace cfg {
 // ================= 窗口设置 (config.py) =================
 inline constexpr int SCREEN_WIDTH  = 1280;   // 窗口宽
 inline constexpr int SCREEN_HEIGHT = 720;    // 窗口高
-inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.5";
+inline constexpr const char* SCREEN_TITLE = "织星计划 Project Weavestar  v1.3.6";
 
 // ================= 地图设置 =================
 inline constexpr int TILE_SIZE  = 32;    // 瓦片像素尺寸（Python一致）
@@ -135,7 +135,8 @@ inline constexpr std::array<ItemType, 8> ORE_TYPES = {
 // 采矿场只出铁锭，组装机永远压不出弹药，第四章的"首次击杀"直接死锁。把三种矿点钉死在
 // 采矿场脚下，同时保证第 4 章"首次击杀"与第 5 章"煤 → 燃煤发电机"必然可解。
 //   采矿场固定落位 (110,92)；矿点在它四邻斜角，半径1(3×3)的矿机都能覆盖。
-//   教学区在路径 y=80 下方约 10 格：开局摄像机对准这里，炮塔抬到路径边即可覆盖。
+//   教学区在路径 y=80 下方约 12 格：开局摄像机对准这里，炮塔抬到路径边即可覆盖。
+//   （教学关实际使用的敌人路径见下方 TUT_PATH_POINTS：大道那一段走向与全图环线一致。）
 inline constexpr int TUT_MINER_X = 110;   // 教程固定采矿场格 X
 inline constexpr int TUT_MINER_Y = 92;    // 教程固定采矿场格 Y
 inline constexpr int TUT_ORE_COUNT = 4;   // 教学区预置矿点数量
@@ -143,6 +144,20 @@ inline constexpr int TUT_ORE_X[TUT_ORE_COUNT] = {109, 111, 109, 111};
 inline constexpr int TUT_ORE_Y[TUT_ORE_COUNT] = { 91,  91,  93,  93};
 inline constexpr ItemType TUT_ORE_T[TUT_ORE_COUNT] = {
     ItemType::IronOre, ItemType::CopperOre, ItemType::Coal, ItemType::IronOre};
+
+// ================= 教程关卡敌人路径（TUT_PATH_POINTS） =================
+// 教学关不走上面那条全图大环线：大环线的出生点钉在地图西边界 (0,60)，敌人要先绕
+// 40+40+60+60 = 200 格才走到教学区旁边。普通敌人 1.5 格/秒 → 玩家架好塔之后要干等
+// 约 133 秒才见到第一个敌人进射程，"首次击杀"迟迟不来。
+// 这里给教学关一条短线，走向与 PATH_POINTS 的 y=80 大道一致（叙事里"北边那条深色
+// 大道"仍然成立）：敌人从大道西侧 12 格处出现，沿大道东行到教学区正上方，再向南压
+// 到厂门口，全程 20 格（约 13 秒）。
+//   · 与教学区不冲突：教学区矿点在 y=91..93、大道在 y=80，两者相隔 11 格；
+//   · 与第 9/14 步的塔位不冲突：大道 (98..110,80) 与南段 (110,80..88) 两侧都是草地；
+//   · 折线形状与 PATH_POINTS 同构，buildPathTiles / buildPixelWaypoints 通用。
+inline const std::vector<sf::Vector2i> TUT_PATH_POINTS = {
+    { 98, 80}, {110, 80}, {110, 88}
+};
 
 // 物品注册表：中文名 / 缩写符号 / 显示颜色 / 是否可由传送带运输
 struct ItemInfo {
@@ -280,8 +295,11 @@ inline int   ASSEMBLER_MAX_STACK = 99999;   // 近乎无限容量            [JS
 inline int   ASSEMBLER_ITEM_CAP  = 128;     // 组装机每种原料缓存上限  [JSON可调]
 
 // ================= 储物桶 (Bucket.py) =================
-inline int   BUCKET_CAPACITY      = 99999;  // 容量                    [JSON可调]
-inline float BUCKET_OUTPUT_INTERVAL = 0.5f; // 输出间隔(秒)            [JSON可调]
+inline int   BUCKET_CAPACITY      = 99999;  // 容量(件)                [JSON可调]
+// 已废弃：储物桶的输出速率现在直接复用物品管道的 PIPES_TRANSFER_INTERVAL +
+// PIPES_PULL_PER_TICK（见 MachineSystem.cpp 末尾的"储物桶输出"段），改这个值不再有任何效果，
+// 只为兼容旧配置/旧存档保留。
+inline float BUCKET_OUTPUT_INTERVAL = PIPES_TRANSFER_INTERVAL; // [已废弃]
 
 // ================= 分流器 (Splitter.py) =================
 inline float SPLITTER_TRANSFER_INTERVAL = 0.15f; // 传输间隔(秒)       [JSON可调]

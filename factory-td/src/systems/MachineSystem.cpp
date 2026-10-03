@@ -357,6 +357,9 @@ void MachineSystem::pushOutputs(Game& g, float dt) {
         auto view = g.reg.view<Building, Machine, Inventory, FaceConfig>();
         for (auto [e, b, m, inv, fc] : view.each()) {
             if (m.kind == MachineKind::Miner) continue;
+            // 发电机没有物品产物：必须在此跳过，否则会落入下方"组装机"else 分支，
+            // 把 ASSEMBLER_RECIPES 的产物（弹药）当作自己的产物往外推
+            if (m.kind == MachineKind::Generator) continue;
             // 可输出物品：
             //   熔炉    → 配方表全部产物（各种锭）
             //   合金炉  → 配方表全部产物（各种合金）
@@ -440,45 +443,51 @@ void MachineSystem::pushOutputs(Game& g, float dt) {
         }
     }
 
-    // ---- 储物桶输出（Python _update_bucket_output） ----
+    // ---- 储物桶输出（Python _update_bucket_output；速率对齐物品管道 + 按面过滤） ----
     {
         auto view = g.reg.view<Building, Bucket, FaceConfig>();
         for (auto [e, b, bucket, fc] : view.each()) {
-            if (bucket.isEmpty() || bucket.outputTimer < cfg::BUCKET_OUTPUT_INTERVAL) continue;
+            if (bucket.isEmpty()) continue;
+            // 节奏与物品管道一致：每 PIPES_TRANSFER_INTERVAL 秒，每个输出面最多
+            // PIPES_PULL_PER_TICK 件（原先固定 0.5 秒 1 件，慢了一个数量级）。
+            bucket.outputTimer += dt;
+            if (bucket.outputTimer < cfg::PIPES_TRANSFER_INTERVAL) continue;
+            bool movedAny = false;
             for (int d = 0; d < 4; ++d) {
                 if (fc.get(d) != cfg::FaceMode::OUTPUT) continue;
                 const int tx = b.pos.x + cfg::Dir::OFFSETS[d][0];
                 const int ty = b.pos.y + cfg::Dir::OFFSETS[d][1];
                 const entt::entity target = neighborAt(g, tx, ty);
-                if (target == entt::null) continue;
-                // 物品管道 / 分流器（自动链接，无需面配置）
-                if (g.reg.all_of<Pipe>(target)) {
-                    auto& pbuf = g.reg.get<Pipe>(target).buffer;
-                    if (pbuf.size() >= static_cast<size_t>(cfg::PIPES_MAX_BUFFER)) continue;
-                    pbuf.push_back(bucket.items.front()); // FIFO取出
-                    bucket.items.pop_front();
-                    bucket.outputTimer = 0.0f;  // 成功输出才重置计时（Python行为）
-                    break;
-                }
-                if (g.reg.all_of<SplitterQueue>(target)) {
-                    auto& sp = g.reg.get<SplitterQueue>(target);
-                    if (sp.queue.size() >= static_cast<size_t>(cfg::SPLITTER_MAX_QUEUE)) continue;
-                    sp.queue.push_back(bucket.items.front());
-                    bucket.items.pop_front();
-                    bucket.outputTimer = 0.0f;
-                    break;
-                }
-                // 任意通物设备：桶内物品入网
-                if (const int nid = meNetworkOf(g, target);
-                    nid >= 0 && nid < static_cast<int>(MeSystem::networks().size())) {
-                    MeNetwork& net = MeSystem::networksMutable()[static_cast<size_t>(nid)];
-                    if (MeSystem::addItem(net, bucket.items.front(), 1) > 0) {
-                        bucket.items.pop_front();
-                        bucket.outputTimer = 0.0f;
-                        break;
+                if (target == entt::null) continue;   // 该面没有下游：跳过，不影响其它面
+                for (int k = 0; k < cfg::PIPES_PULL_PER_TICK; ++k) {
+                    // 只挑本面白名单放行的物品；白名单为空 = 不过滤。
+                    // 队首不匹配就往后找第一个匹配的，FIFO 顺序在各自面内保持。
+                    auto it = std::find_if(bucket.items.begin(), bucket.items.end(),
+                        [&](cfg::ItemType t) { return bucket.faceAllows(d, t); });
+                    if (it == bucket.items.end()) break;
+                    const cfg::ItemType item = *it;
+                    // 物品管道 / 分流器（自动链接，无需面配置）
+                    if (g.reg.all_of<Pipe>(target)) {
+                        auto& pbuf = g.reg.get<Pipe>(target).buffer;
+                        if (pbuf.size() >= static_cast<size_t>(cfg::PIPES_MAX_BUFFER)) break;
+                        pbuf.push_back(item);
+                    } else if (g.reg.all_of<SplitterQueue>(target)) {
+                        auto& sp = g.reg.get<SplitterQueue>(target);
+                        if (sp.queue.size() >= static_cast<size_t>(cfg::SPLITTER_MAX_QUEUE)) break;
+                        sp.queue.push_back(item);
+                    } else if (const int nid = meNetworkOf(g, target);
+                               nid >= 0 && nid < static_cast<int>(MeSystem::networks().size())) {
+                        // 任意通物设备：桶内物品入网
+                        MeNetwork& net = MeSystem::networksMutable()[static_cast<size_t>(nid)];
+                        if (MeSystem::addItem(net, item, 1) <= 0) break;
+                    } else {
+                        break;   // 下游不是能收货的东西
                     }
+                    bucket.items.erase(it);
+                    movedAny = true;
                 }
             }
+            if (movedAny) bucket.outputTimer = 0.0f;   // 成功输出才重置计时（Python行为）
         }
     }
 }

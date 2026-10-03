@@ -201,6 +201,8 @@ bool loadConfig(const std::string& path) {
     setIf(PIPES_MAX_EXPAND, j, "pipes_max_expand");
     setIf(PIPES_PULL_PER_TICK, j, "pipes_pull_per_tick");
     setIf(BUCKET_CAPACITY, j, "bucket_capacity");
+    // 已废弃：桶的输出速率现在随物品管道（PIPES_TRANSFER_INTERVAL / PIPES_PULL_PER_TICK），
+    // 这个键读进来也不再影响行为，保留只是不让旧 config.json 变成未知键。
     setIf(BUCKET_OUTPUT_INTERVAL, j, "bucket_output_interval");
     setIf(SPLITTER_TRANSFER_INTERVAL, j, "splitter_transfer_interval");
     setIf(SPLITTER_MAX_QUEUE, j, "splitter_max_queue");

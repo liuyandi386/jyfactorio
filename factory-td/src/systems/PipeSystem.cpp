@@ -247,6 +247,10 @@ std::vector<cfg::ItemType> PipeSystem::wantedInputs(const Game& g, const Machine
                 wanted.push_back(t);
             break;
         }
+        case MachineKind::Generator:
+            // 燃煤发电机：唯一的"原料"就是煤（燃料）
+            wanted.push_back(cfg::ItemType::Coal);
+            break;
         default:
             return {};   // 采矿机不需要拉取
     }

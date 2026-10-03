@@ -169,7 +169,12 @@ void PlayerSystem::handleLeftClick(Game& g, sf::Vector2f world, sf::Vector2f scr
     // 商店兑换的机器：一次免费放置（材料已在商店扣除）
     const bool freePlace = g.hasFreePlace && g.selected == g.freePlaceType;
     // 位置与资源检查（Python: 先查可放置，再查资源）
-    if (!g.canPlace(tx, ty, g.selected)) return;
+    if (!g.canPlace(tx, ty, g.selected)) {
+        // 静默失败会让玩家以为"点了没反应、游戏卡了"（教程里尤其致命）。
+        // 三种拒绝原因合并成一句，避免为此把 canPlace 拆成多返回值。
+        g.ui->showToast("这里放不下：目标格被占用、地形不允许，或压着矿点");
+        return;
+    }
     if (!freePlace && !g.canAfford(g.selected)) {
         g.ui->showToast("资源不足!");
         return;

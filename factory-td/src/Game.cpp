@@ -25,6 +25,17 @@
 #include "utils/Profiler.h"
 
 // ---------------------------------------------------------------------
+// 教程关 / 普通关各自的敌人路径
+// 两套路径的取舍见 GameConfig.h 里 TUT_PATH_POINTS 的说明：教学关用一条短线，
+// 免得玩家架好塔之后干等两分钟才见到敌人。
+// 地形（路径贴图 + terrain==1）与敌人移动路点必须取同一套，否则矿点避让、塔位
+// 判断、路径贴图会互相错位。
+// ---------------------------------------------------------------------
+static const std::vector<sf::Vector2i>& activePathPoints(GameMode m) {
+    return (m == GameMode::Tutorial) ? cfg::TUT_PATH_POINTS : cfg::PATH_POINTS;
+}
+
+// ---------------------------------------------------------------------
 // 构造 / 析构
 // ---------------------------------------------------------------------
 Game::Game(GameMode m) : mode(m) {
@@ -57,7 +68,7 @@ Game::Game(GameMode m) : mode(m) {
     generateTerrain();
     generateOreDeposits();
     initPlayerInventory();
-    enemyWaypoints = buildPixelWaypoints(cfg::PATH_POINTS, cfg::TILE_SIZE);
+    enemyWaypoints = buildPixelWaypoints(activePathPoints(mode), cfg::TILE_SIZE);
 
     // 帧率/垂直同步：统一走 gset::applyFrameMode（默认垂直同步 → 跟随显示器刷新率，
     // 144Hz 屏即 144 帧；旧的 setFramerateLimit(60) 会强制关掉垂直同步并锁 60 帧）
@@ -72,6 +83,12 @@ Game::Game(GameMode m) : mode(m) {
         // 有未完成进度则续接，否则（无进度 / 上次已学完）从第一步重新教起。
         if (!tutorial::loadProgressFile(tutorial) || !tutorial.active) {
             tutorial::begin(*this);
+        } else if (!tutorial::canResumeInWorld(*this)) {
+            // 进度文件说"走到第 N 步"，但世界里已经找不到前面几步放下的建筑
+            // （教程模式的世界不落盘，重启客户端后建筑就没了）。照旧续接会把玩家
+            // 卡在一个永远做不完的步骤上，所以丢掉这份进度、从头教起。
+            tutorial::begin(*this);
+            ui->showToast("引导世界已重置 · 从头开始");
         } else {
             ui->showToast("新手教程已续接上次进度 · F2 跳过");
         }
@@ -92,7 +109,7 @@ Game::~Game() { delete ui; }
 // ---------------------------------------------------------------------
 void Game::generateTerrain() {
     terrain.assign(static_cast<size_t>(grid.w) * grid.h, 0);  // 默认草地
-    const auto pathTiles = buildPathTiles(cfg::PATH_POINTS, grid.w, grid.h);
+    const auto pathTiles = buildPathTiles(activePathPoints(mode), grid.w, grid.h);
     for (const auto& p : pathTiles)
         terrain[static_cast<size_t>(p.y) * grid.w + p.x] = 1;  // 路径
 }
@@ -193,6 +210,17 @@ bool Game::isOccupied(int tx, int ty) const {
 bool Game::canPlace(int tx, int ty, cfg::BuildingType t) const {
     // 占地尺寸统一取自 cfg::BUILDING_INFOS（当前全部 1×1）
     const auto bs = cfg::buildingSize(t);
+    // 矿点检查：**任何建筑**都不得压在矿点上（含管道 / 线缆 / 分流器 / 储物桶）。
+    // "矿点"的判定 = 该格是否存在 OreDeposit 实体（矿点是独立实体，不写进 grid/terrain）。
+    // 说明：采集只遍历 OreDeposit、不看 grid.building，被压住的矿点其实仍然采得到；
+    //      禁放的理由是"矿点被盖住后玩家看不见那里有矿"，且这条规则要对所有建筑一视同仁。
+    for (auto [oe, pos, dep] : reg.view<GridPos, OreDeposit>().each()) {
+        (void)oe;
+        (void)dep;
+        if (pos.x >= tx && pos.x < tx + bs.w &&
+            pos.y >= ty && pos.y < ty + bs.h)
+            return false;
+    }
     for (int dy = 0; dy < bs.h; ++dy)
         for (int dx = 0; dx < bs.w; ++dx) {
             const int x = tx + dx, y = ty + dy;
@@ -320,6 +348,12 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
             gen.legacyMode = true;
             gen.burnTotal = cfg::LEGACY_GEN_BURN_TIME;
             gen.outputRate = 0.0f;
+            // 必须挂 Machine：物品推送/拉取路径（MachineSystem/MachineSystem 目标判定、
+            // PipeSystem::wantedInputs、MeSystem 送料）都以 Machine 组件为门槛，
+            // 漏挂会导致"煤推不进去，只有管道紧贴时才收得到"
+            auto& m = reg.emplace<Machine>(e);
+            m.kind = MachineKind::Generator;
+            m.powered = true;   // 发电机自身不耗电，避免被电力系统判为停产
             reg.emplace<Inventory>(e, 1, cfg::LEGACY_GEN_MAX_COAL);
             reg.emplace<FaceConfig>(e, FaceConfig::makeAll(cfg::FaceMode::INPUT, 3));
             break;
@@ -330,6 +364,11 @@ entt::entity Game::placeBuilding(int tx, int ty, cfg::BuildingType t, int dir, b
             gen.legacyMode = false;
             gen.burnTotal = cfg::POWERGEN_COAL_BURN_TIME;
             gen.outputRate = 0.0f;
+            // 必须挂 Machine：物品推送/拉取路径都以 Machine 组件为门槛，
+            // 漏挂会导致"煤推不进去，只有管道紧贴时才收得到"
+            auto& m = reg.emplace<Machine>(e);
+            m.kind = MachineKind::Generator;
+            m.powered = true;   // 发电机自身不耗电，避免被电力系统判为停产
             reg.emplace<Inventory>(e, 2, 64);
             reg.emplace<FaceConfig>(e, FaceConfig::makeAll(cfg::FaceMode::INPUT, 3));
             break;
@@ -747,10 +786,14 @@ void Game::updateHoverTooltip() {
     for (auto [e, b, gen, inv] : reg.view<Building, PowerGeneratorNode, Inventory>().each()) {
         if (b.type != cfg::BuildingType::PowerGenerator || !hit(e)) continue;
         hoveredEntity = e;
-        setTip("燃煤发电机", {
+        std::vector<std::string> genTip = {
             "燃料(煤): " + std::to_string(inv.count(cfg::ItemType::Coal)),
             "输出: " + std::to_string(static_cast<int>(gen.outputRate)) + " EU/s",
-            std::string("状态: ") + (gen.running ? "运行中" : "待燃料")});
+            std::string("状态: ") + (gen.running ? "运行中" : "待燃料")};
+        // 实机常见坑：上游储物桶的输出面是白名单，没勾『煤』的话煤会一直囤在桶里出不来
+        if (!gen.running)
+            genTip.push_back("提示: 管道没送来煤时，看上游储物桶的输出面有没有勾『煤』");
+        setTip("燃煤发电机", genTip);
         return;
     }
     // 储物桶

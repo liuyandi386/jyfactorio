@@ -177,6 +177,24 @@ bool GameUI::handleEvent(const sf::Event& e) {
         }
         return false;
     }
+    // 面板正在拖动：鼠标移动/松开/失焦事件必须能到达这里。
+    // （下面那条"只放行左键按下"的早退会挡掉 MouseMoved，所以这段必须放在它前面。）
+    if (panelDragging_) {
+        if (e.type == sf::Event::MouseMoved) {
+            updatePanelDrag({static_cast<float>(e.mouseMove.x),
+                             static_cast<float>(e.mouseMove.y)}, false);
+            return true;   // 拖动中吞掉，别让世界一起响应悬停
+        }
+        if (e.type == sf::Event::MouseButtonReleased && e.mouseButton.button == sf::Mouse::Left) {
+            updatePanelDrag({}, true);
+            return true;
+        }
+        if (e.type == sf::Event::LostFocus) {
+            // 窗口失焦兜底：停止拖动，免得面板继续黏着鼠标
+            cancelPanelDrag();
+        }
+    }
+
     if (e.type != sf::Event::MouseButtonPressed || e.mouseButton.button != sf::Mouse::Left)
         return false;
     const sf::Vector2f pos(static_cast<float>(e.mouseButton.x),
@@ -184,6 +202,8 @@ bool GameUI::handleEvent(const sf::Event& e) {
 
     // 世界地图激活时：所有点击由地图层处理（仅关闭）
     if (worldMapOpen_) { worldMapOpen_ = false; return true; }
+    // 任意可拖面板：按在它的标题栏 = 开始拖动（吞掉这次按下，不派发给下方控件）
+    if (tryStartPanelDrag(pos)) return true;
     // 通物网络面板激活时：面板内点击无操作，外部点击关闭
     if (mePanelActive_) {
         if (!mePanelRect_.contains(pos)) hideMePanel();
@@ -273,6 +293,10 @@ void GameUI::handlePopupClick(sf::Vector2f pos) {
             return;
         }
     }
+    // 点在按钮之外：关掉弹窗，把操作权还给玩家。
+    // 旧行为是"什么也不做、但把这次点击吃掉"——玩家按直觉再点一次目标格时会像点了空气，
+    // 教程里很容易被理解成"游戏卡住了"。关掉之后，玩家再点一次就是正常的一次新放置。
+    hideDirectionPopup();
 }
 
 bool GameUI::handleBackpackClick(sf::Vector2f pos) {
@@ -306,6 +330,13 @@ void GameUI::handleFaceEditorClick(sf::Vector2f pos) {
             return;
         }
     }
+    // 储物桶：面按钮下方还有一个「过滤设置」入口（点开按面过滤面板）
+    const sf::FloatRect fb = faceEditFilterBtnRect();
+    if (fb.width > 0.0f && fb.contains(pos)) {
+        showFilterPanel(target);
+        g_->faceEditTarget = entt::null;   // 面编辑器让位，避免两个面板叠在一起
+        return;
+    }
     // 点击编辑器外部 → 关闭（Python: 中心矩形膨胀3倍外即关闭）
     // 按真实占地放大关闭范围（当前全部 1×1 → 3 格）
     const auto& b = g_->reg.get<Building>(target);
@@ -318,8 +349,7 @@ void GameUI::handleFaceEditorClick(sf::Vector2f pos) {
     if (!zone.contains(pos)) g_->faceEditTarget = entt::null;
 }
 
-std::array<sf::FloatRect, 4> GameUI::faceEditorRects() const {
-    std::array<sf::FloatRect, 4> rects{};
+std::array<sf::FloatRect, 4> GameUI::faceEditorRects() const {    std::array<sf::FloatRect, 4> rects{};
     const entt::entity target = g_->faceEditTarget;
     if (target == entt::null || !g_->reg.valid(target)) return rects;
     const auto& b = g_->reg.get<Building>(target);
@@ -337,6 +367,21 @@ std::array<sf::FloatRect, 4> GameUI::faceEditorRects() const {
     rects[cfg::Dir::DOWN]  = {cx - bs / 2.0f, cy + offY - bs / 2.0f, bs, bs};
     rects[cfg::Dir::LEFT]  = {cx - offX - bs / 2.0f, cy - bs / 2.0f, bs, bs};
     return rects;
+}
+
+sf::FloatRect GameUI::faceEditFilterBtnRect() const {
+    // 只有储物桶有"按面过滤"这回事；其它建筑返回空矩形 = 不画按钮
+    const entt::entity target = g_->faceEditTarget;
+    if (target == entt::null || !g_->reg.valid(target) ||
+        !g_->reg.all_of<Bucket>(target)) return {};
+    const auto& b = g_->reg.get<Building>(target);
+    const auto sc = g_->worldToScreen(g_->buildingCenter(b));
+    const float size = cfg::TILE_SIZE * g_->camera.zoom;
+    const float bs = std::max(24.0f, 28.0f * g_->camera.zoom);
+    const float offY = size * static_cast<float>(b.h + 1) * 0.5f;
+    const float w = 132.0f, h = 24.0f;
+    // 放在"下"面按钮再往下一档，不和面按钮打架
+    return {sc.x - w / 2.0f, sc.y + offY + bs / 2.0f + 10.0f, w, h};
 }
 
 // ---------------------------------------------------------------------
@@ -538,6 +583,7 @@ void GameUI::drawRecipePopup(sf::RenderTarget& rt) {
 // ---------------------------------------------------------------------
 void GameUI::toggleShop() {
     shopOpen_ = !shopOpen_;
+    if (workbenchOpen_) cancelPanelDrag();   // 顺带关掉工作台时，结束可能正在进行的拖动
     workbenchOpen_ = false;
     if (shopOpen_) layoutShop();
 }
@@ -654,7 +700,7 @@ void GameUI::layoutWorkbench() {
 }
 
 void GameUI::handleWorkbenchClick(sf::Vector2f pos) {
-    if (!craftPanel_.contains(pos)) { workbenchOpen_ = false; return; }
+    if (!craftPanel_.contains(pos)) { cancelPanelDrag(); workbenchOpen_ = false; return; }
     for (size_t i = 0; i < craftRects_.size(); ++i) {
         if (i >= cfg::CRAFTING_RECIPES.size() || !craftRects_[i].contains(pos)) continue;
         const auto& r = cfg::CRAFTING_RECIPES[i];
@@ -989,21 +1035,125 @@ void GameUI::drawMePanel(sf::RenderTarget& rt) {
 void GameUI::showFilterPanel(entt::entity e) {
     filterPanelActive_ = true;
     filterPanelEntity_ = e;
+    cancelPanelDrag();   // 每次打开都回到默认落位（拖动后的位置不跨次记忆）
+    // 储物桶：面板多一行「面选择」，物品网格整体下移；默认落在第一个输出面
+    const bool isBucket = g_->reg.valid(e) && g_->reg.all_of<Bucket>(e);
+    if (isBucket) {
+        bucketFilterFace_ = cfg::Dir::UP;
+        if (g_->reg.all_of<FaceConfig>(e)) {
+            const auto& fc = g_->reg.get<FaceConfig>(e);
+            for (int d = 0; d < 4; ++d) {
+                if (fc.get(d) == cfg::FaceMode::OUTPUT) { bucketFilterFace_ = d; break; }
+            }
+        }
+    }
     const float w = 440.0f, cellW = 205.0f, cellH = 22.0f;
-    const float px = (winW_ - w) / 2.0f;
-    const float py = 90.0f;
-    const float top = py + 40.0f;
+    const float faceRow = isBucket ? 32.0f : 0.0f;
+    const float h = 40.0f + faceRow + (cfg::ITEM_COUNT / 2) * cellH + 26.0f;
+    // 初始落位：右下角（右边留 12px、底边留 12px）。
+    // 右边按「游戏区」右边界算：窗口最右侧 200px 是背包侧栏，贴窗口右边会被它整片盖住。
+    // 面板高度随物品行数与「面选择」行变化，所以用 h 反推 y，保证底边始终贴齐。
+    const float px = std::max(0.0f, winW_ - cfg::ui::SIDE_PANEL_WIDTH - w - 12.0f);
+    const float py = std::max(0.0f, winH_ - h - 12.0f);
+    const float top = py + 40.0f + faceRow;
+    for (int d = 0; d < 4; ++d) {
+        bucketFaceRects_[static_cast<size_t>(d)] =
+            {px + 12.0f + static_cast<float>(d) * 105.0f, py + 38.0f, 97.0f, 24.0f};
+    }
     for (int i = 0; i < cfg::ITEM_COUNT; ++i) {
         const int row = i / 2, col = i % 2;
         filterRects_[static_cast<size_t>(i)] =
             {px + 10.0f + col * (cellW + 10.0f), top + row * cellH, cellW, cellH};
     }
-    const float h = 40.0f + (cfg::ITEM_COUNT / 2) * cellH + 26.0f;
     filterPanelRect_ = {px, py, w, h};
+}
+
+// ---- 面板通用拖动 ----------------------------------------------------
+// 每个面板可拖动区的下边界都取自「它自己标题栏的绘制高度 + 2px 上边框」，
+// 并且都停在标题栏下方第一排控件之前（面按钮 top+38 / 采矿场按钮 / 配方行），
+// 所以"按标题栏拖动"和"点下方控件"不会抢事件。
+// 面板比窗口还大时 maxL/maxT 会算成 0：面板贴左上角，不会跑到看不见的地方。
+void GameUI::collectDragPanels(std::vector<DragPanel>& out) {
+    out.clear();
+    // 只收集当前打开的面板；多个同时打开时都在表里，各自独立拖动、互不干扰
+    if (filterPanelActive_) {
+        DragPanel d{&filterPanelRect_, FILTER_PANEL_HEAD_H, {}};
+        for (auto& r : bucketFaceRects_) d.children.push_back(&r);
+        for (auto& r : filterRects_) d.children.push_back(&r);
+        out.push_back(std::move(d));
+    }
+    if (mePanelActive_) out.push_back({&mePanelRect_, ME_PANEL_HEAD_H, {}});
+    if (minerPanelActive()) {
+        DragPanel d{&minerPanelRect_, MINER_PANEL_HEAD_H, {}};
+        for (auto& r : minerModeRects_) d.children.push_back(&r);
+        for (auto& r : minerOreRects_) d.children.push_back(&r);
+        d.children.push_back(&minerRotateRect_);
+        d.children.push_back(&minerCloseRect_);
+        out.push_back(std::move(d));
+    }
+    if (workbenchOpen_) {
+        DragPanel d{&craftPanel_, CRAFT_PANEL_HEAD_H, {}};
+        for (auto& r : craftRects_) d.children.push_back(&r);
+        out.push_back(std::move(d));
+    }
+}
+
+bool GameUI::tryStartPanelDrag(sf::Vector2f pos) {
+    std::vector<DragPanel> panels;
+    collectDragPanels(panels);
+    for (auto& p : panels) {
+        if (!p.rect || p.headH <= 0.0f) continue;
+        const sf::FloatRect head{p.rect->left, p.rect->top, p.rect->width, p.headH};
+        if (!head.contains(pos)) continue;
+        panelDragging_ = true;
+        dragPanelRect_ = p.rect;
+        dragPanelOffset_ = pos - sf::Vector2f(p.rect->left, p.rect->top);
+        dragPanelChildren_ = std::move(p.children);
+        return true;   // 命中标题栏：吞掉这次按下，不派发给标题栏下方的控件
+    }
+    return false;
+}
+
+void GameUI::updatePanelDrag(sf::Vector2f pos, bool released) {
+    if (!panelDragging_) return;
+    if (released) { cancelPanelDrag(); return; }
+    if (!dragPanelRect_) { cancelPanelDrag(); return; }
+    // 目标位置 = 当前鼠标位置 - 按下时的偏移；再夹进窗口，避免面板被拖到看不见的地方
+    sf::FloatRect& r = *dragPanelRect_;
+    const float maxL = std::max(0.0f, winW_ - r.width);
+    const float maxT = std::max(0.0f, winH_ - r.height);
+    const float nl = std::clamp(pos.x - dragPanelOffset_.x, 0.0f, maxL);
+    const float nt = std::clamp(pos.y - dragPanelOffset_.y, 0.0f, maxT);
+    const float dx = nl - r.left;
+    const float dy = nt - r.top;
+    if (dx == 0.0f && dy == 0.0f) return;
+    r.left = nl;
+    r.top = nt;
+    // 子控件矩形同步平移，保证拖动之后按钮/列表的命中区仍然对得上
+    for (auto* c : dragPanelChildren_)
+        if (c) { c->left += dx; c->top += dy; }
 }
 
 void GameUI::handleFilterPanelClick(sf::Vector2f pos) {
     if (!filterPanelRect_.contains(pos)) { hideFilterPanel(); return; }
+    const bool isBucket = g_->reg.valid(filterPanelEntity_) &&
+                          g_->reg.all_of<Bucket>(filterPanelEntity_);
+    if (isBucket) {
+        // 先看四个面按钮（只切面，不关面板），再看物品网格（增删该面的白名单）
+        for (int d = 0; d < 4; ++d) {
+            if (bucketFaceRects_[static_cast<size_t>(d)].contains(pos)) {
+                bucketFilterFace_ = d;
+                return;
+            }
+        }
+        for (int i = 0; i < cfg::ITEM_COUNT; ++i) {
+            if (!filterRects_[static_cast<size_t>(i)].contains(pos)) continue;
+            g_->reg.get<Bucket>(filterPanelEntity_)
+                .toggleFaceFilter(bucketFilterFace_, static_cast<cfg::ItemType>(i));
+            return;   // 点中行不关闭，可连续勾选
+        }
+        return;
+    }
     for (int i = 0; i < cfg::ITEM_COUNT; ++i) {
         if (!filterRects_[static_cast<size_t>(i)].contains(pos)) continue;
         const auto t = static_cast<cfg::ItemType>(i);
@@ -1031,7 +1181,60 @@ void GameUI::drawFilterPanel(sf::RenderTarget& rt) {
     head.setPosition(panel.left, panel.top + 2.0f);
     head.setFillColor(sf::Color(0, 140, 165));
     rt.draw(head);
-    drawText(rt, "通物接口 · 输出过滤", 16, {panel.left + 14.0f, panel.top + 9.0f}, UI_TEXT_LIGHT);
+    const bool validBucket = g_->reg.valid(filterPanelEntity_) &&
+                             g_->reg.all_of<Bucket>(filterPanelEntity_);
+    const bool validMe = g_->reg.valid(filterPanelEntity_) &&
+                         g_->reg.all_of<MeInterface>(filterPanelEntity_);
+    drawText(rt, validBucket ? "储物桶 · 各面输出过滤" : "通物接口 · 输出过滤", 16,
+             {panel.left + 14.0f, panel.top + 9.0f}, UI_TEXT_LIGHT);
+
+    // ---- 储物桶：先选面，再勾物品（每个面一份白名单）----
+    if (validBucket) {
+        const auto& bucket = g_->reg.get<Bucket>(filterPanelEntity_);
+        const FaceConfig* fcp = g_->reg.all_of<FaceConfig>(filterPanelEntity_)
+                              ? &g_->reg.get<FaceConfig>(filterPanelEntity_) : nullptr;
+        const char* dirName[4] = {"↑ 上", "→ 右", "↓ 下", "← 左"};
+        for (int d = 0; d < 4; ++d) {
+            const auto& rect = bucketFaceRects_[static_cast<size_t>(d)];
+            const bool cur = (d == bucketFilterFace_);
+            const bool isOut = fcp && fcp->get(d) == cfg::FaceMode::OUTPUT;
+            const auto& fl = bucket.faceFilter[static_cast<size_t>(d)];
+            sf::RectangleShape row({rect.width, rect.height});
+            row.setPosition(rect.left, rect.top);
+            row.setFillColor(cur ? sf::Color(0, 110, 135)
+                                 : (isOut ? sf::Color(46, 58, 66) : sf::Color(30, 40, 48)));
+            row.setOutlineColor(cur ? sf::Color(0, 220, 255)
+                                    : (isOut ? sf::Color(235, 150, 60) : sf::Color(60, 70, 80)));
+            row.setOutlineThickness(cur ? 1.5f : 1.0f);
+            rt.draw(row);
+            std::string cap = std::string(dirName[d]) + (isOut ? " 输出" : "");
+            if (!fl.empty()) cap += " · " + std::to_string(fl.size()) + " 种";
+            drawText(rt, cap, 11, {rect.left + 7.0f, rect.top + 6.0f}, UI_TEXT_LIGHT);
+        }
+        for (int i = 0; i < cfg::ITEM_COUNT; ++i) {
+            const auto t = static_cast<cfg::ItemType>(i);
+            const auto& rect = filterRects_[static_cast<size_t>(i)];
+            const bool locked = bucket.faceAllows(bucketFilterFace_, t);
+            sf::RectangleShape row({rect.width, rect.height});
+            row.setPosition(rect.left, rect.top);
+            row.setFillColor(locked ? sf::Color(0, 110, 135) : sf::Color(30, 40, 48));
+            row.setOutlineColor(locked ? sf::Color(0, 220, 255) : sf::Color(60, 70, 80));
+            row.setOutlineThickness(locked ? 1.5f : 1.0f);
+            rt.draw(row);
+            sf::RectangleShape icon({14.0f, 14.0f});
+            icon.setPosition(rect.left + 6.0f, rect.top + 4.0f);
+            icon.setFillColor(ItemSystem::color(t));
+            rt.draw(icon);
+            drawText(rt, ItemSystem::nameZh(t), 12, {rect.left + 26.0f, rect.top + 5.0f},
+                     locked ? UI_TEXT_LIGHT : UI_TEXT);
+            if (locked)
+                drawText(rt, "✓", 13, {rect.left + rect.width - 16.0f, rect.top + 4.0f},
+                         sf::Color(0, 240, 255));
+        }
+        drawText(rt, "先选面，再勾物品 = 该面只输出这些；某面一个都不勾 = 该面不过滤（全部可出）", 10,
+                 {panel.left + panel.width / 2.0f, panel.top + panel.height - 14.0f}, UI_TEXT, true);
+        return;
+    }
 
     const bool valid = g_->reg.valid(filterPanelEntity_) &&
                        g_->reg.all_of<MeInterface>(filterPanelEntity_);
@@ -1343,6 +1546,25 @@ void GameUI::drawResourceBar(sf::RenderTarget& rt) {
     } else {
         drawText(rt, "等待开始", 15, {modeX, 15.0f}, UI_TEXT);
     }
+
+    // ---- 坐标显示（鼠标所指格 + 相机中心格） ----
+    // 目的：截屏排查/定位时能直接读到"屏幕这一点对应世界的哪一格"，不用再靠数格子估算。
+    //   格 = 鼠标当前指向的世界格坐标（随鼠标移动刷新）
+    //   中心 = 相机中心所在的世界格坐标（随镜头移动刷新）
+    // 中心直接取 camera 的世界像素 floor 成格，不用屏幕像素反算：
+    // 窗口被手动拉伸后游戏内部视口尺寸与实际窗口不再一致，反算出来的中心会偏。
+    {
+        const sf::Vector2i mp = sf::Mouse::getPosition(g_->window);
+        const sf::Vector2i hoverTile = g_->tileAt(g_->screenToWorld(
+            {static_cast<float>(mp.x), static_cast<float>(mp.y)}));
+        const sf::Vector2i camTile{
+            static_cast<int>(std::floor(g_->camera.x / static_cast<float>(cfg::TILE_SIZE))),
+            static_cast<int>(std::floor(g_->camera.y / static_cast<float>(cfg::TILE_SIZE)))};
+        char coord[96];
+        std::snprintf(coord, sizeof(coord), "格 %d,%d   中心 %d,%d",
+                      hoverTile.x, hoverTile.y, camTile.x, camTile.y);
+        drawText(rt, coord, 13, {helpBtn_.left + helpBtn_.width + 24.0f, 16.0f}, UI_TEXT);
+    }
 }
 
 void GameUI::drawSidePanel(sf::RenderTarget& rt) {
@@ -1404,17 +1626,21 @@ void GameUI::drawToast(sf::RenderTarget& rt) {
     if (toastTimer_ < 0.5f) alpha = toastTimer_ / 0.5f;
     const float w = 300.0f, h = 60.0f;
     const float x = (winW_ - cfg::ui::SIDE_PANEL_WIDTH - w) / 2.0f;
+    // y 原本是 80：教程横幅占 y≈107..188，toast 正好压在它身上，两层文字糊成一片；
+    // 单行 toast 遇上长句还会横向溢出（看起来像"两行字叠着"）。
+    // 挪到横幅正下方，toast 与横幅互不遮挡。
+    const float y = 196.0f;
     sf::RectangleShape bg({w, h});
-    bg.setPosition(x, 80.0f);
+    bg.setPosition(x, y);
     bg.setFillColor(sf::Color(0, 0, 0, static_cast<uint8_t>(180.0f * alpha)));
     rt.draw(bg);
     sf::RectangleShape border({w, h});
-    border.setPosition(x, 80.0f);
+    border.setPosition(x, y);
     border.setFillColor(sf::Color::Transparent);
     border.setOutlineColor(UI_ACCENT_RED);
     border.setOutlineThickness(2.0f);
     rt.draw(border);
-    drawText(rt, toast_, 18, {x + w / 2.0f, 80.0f + h / 2.0f - 10.0f},
+    drawText(rt, toast_, 18, {x + w / 2.0f, y + h / 2.0f - 10.0f},
              sf::Color(255, 255, 255, static_cast<uint8_t>(255.0f * alpha)), true);
 }
 
@@ -1609,6 +1835,19 @@ void GameUI::drawFaceEditor(sf::RenderTarget& rt) {
     drawText(rt, "[ESC]或点击外部关闭", 9,
              {sc.x, sc.y + size / 2.0f + 34.0f * g_->camera.zoom + 24.0f},
              sf::Color(180, 180, 180), true);
+
+    // 储物桶：多给一个「过滤设置」入口（每个输出面可分别指定只输出哪些物品）
+    const sf::FloatRect fb = faceEditFilterBtnRect();
+    if (fb.width > 0.0f) {
+        sf::RectangleShape btn({fb.width, fb.height});
+        btn.setPosition(fb.left, fb.top);
+        btn.setFillColor(sf::Color(0, 140, 165));
+        btn.setOutlineColor(sf::Color(200, 200, 200));
+        btn.setOutlineThickness(1.0f);
+        rt.draw(btn);
+        drawText(rt, "过滤设置", 12, {fb.left + fb.width / 2.0f, fb.top + 5.0f},
+                 sf::Color(235, 245, 250), true);
+    }
 }
 
 void GameUI::drawOverlays(sf::RenderTarget& rt) {
@@ -2409,6 +2648,7 @@ void GameUI::openHelp(int tab) {
     helpTab_ = std::clamp(tab, 0, HELP_TAB_COUNT - 1);
     helpScroll_ = 0.0f;
     // 与其它全屏面板互斥，避免叠加
+    cancelPanelDrag();      // 全屏页盖上来时，结束可能正在进行的面板拖动
     shopOpen_ = false;
     workbenchOpen_ = false;
     worldMapOpen_ = false;

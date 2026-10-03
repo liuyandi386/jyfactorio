@@ -1,6 +1,6 @@
 # Factorio风格2D工厂塔防游戏
 
-> **当前主力版本：C++ 重构版（`factory-td/` 工程）——Alpha v1.3.5**
+> **当前主力版本：C++ 重构版（`factory-td/` 工程）——Alpha v1.3.6**
 > ——《织星计划 Project Weavestar》：你是「织星工业」的外派工程师，建厂 · 清障 · 交付，然后前往下一颗星球。
 > 历史版本：Python + pygame-ce 版（`python版（老版）/`，已停止开发）
 
@@ -12,7 +12,7 @@
 
 ## 下载与运行（免安装）
 
-> **⬇ [factory-td-v1.3.5-win64.zip](https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.5/factory-td-v1.3.5-win64.zip)**
+> **⬇ [factory-td-v1.3.6-win64.zip](https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.6/factory-td-v1.3.6-win64.zip)**
 > —— Windows 64 位绿色包，解压即玩。
 
 1. 下载 zip 后**把整个文件夹一起解压**到任意目录（不要只把 exe 单独拖出来）。
@@ -92,7 +92,7 @@ Linux/macOS 同理，使用 `-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsys
 ```bat
 cd factory-td
 build.bat      :: 1. 编译（对外发布建议用可分发构建，见下）
-package.bat    :: 2. 自动打包 → dist\factory-td-v1.3.5-win64.zip
+package.bat    :: 2. 自动打包 → dist\factory-td-v1.3.6-win64.zip
 ```
 
 `package.bat` 按当前项目结构自动收集：
@@ -136,16 +136,16 @@ package.bat nobuild    :: 跳过重编译，直接用现有 build 打包（自�
 ### 发布到 GitHub Releases
 
 ```bat
-git tag -a v1.3.5 -m "Alpha v1.3.5"
-git push origin v1.3.5
+git tag -a v1.3.6 -m "Alpha v1.3.6"
+git push origin v1.3.6
 ```
 
-然后打开 `https://github.com/liuyandi386/jyfactorio/releases/new?tag=v1.3.5`，把 `dist\factory-td-v1.3.5-win64.zip` 拖进 **Attach binaries**，标题填 `Alpha v1.3.5`，正文可直接用 `update.md` 里对应章节，点 **Publish release**。
+然后打开 `https://github.com/liuyandi386/jyfactorio/releases/new?tag=v1.3.6`，把 `dist\factory-td-v1.3.6-win64.zip` 拖进 **Attach binaries**，标题填 `Alpha v1.3.6`，正文可直接用 `update.md` 里对应章节，点 **Publish release**。
 
 发布后该文件的永久下载地址（文档中用的就是它）：
 
 ```
-https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.5/factory-td-v1.3.5-win64.zip
+https://github.com/liuyandi386/jyfactorio/releases/download/v1.3.6/factory-td-v1.3.6-win64.zip
 ```
 
 > **地址规则**：`releases/download/<tag>/<附件文件名>`，tag 名与文件名必须完全一致，否则 404。`releases/latest/download/<文件名>` 始终指向最新版，但文件名带版本号，升版后会失效。

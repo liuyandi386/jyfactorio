@@ -71,6 +71,7 @@ public:
         mePanelEntity_ = entt::null;
         filterPanelActive_ = false;
         filterPanelEntity_ = entt::null;
+        cancelPanelDrag();              // ESC 关面板时同样结束拖动
         minerPanelEntity_ = entt::null;
         helpOpen_ = false;
     }
@@ -110,16 +111,27 @@ public:
 
     /// 通物网络物品清单（右键任意通物设备打开，通物终端式）
     void showMePanel(entt::entity e);
-    void hideMePanel() { mePanelActive_ = false; mePanelEntity_ = entt::null; }
+    void hideMePanel() {
+        mePanelActive_ = false;
+        mePanelEntity_ = entt::null;
+        cancelPanelDrag();
+    }
 
     /// 通物接口过滤面板（右键接口打开：点选锁定输出物品）
     void showFilterPanel(entt::entity e);
-    void hideFilterPanel() { filterPanelActive_ = false; filterPanelEntity_ = entt::null; }
+    void hideFilterPanel() {
+        filterPanelActive_ = false;
+        filterPanelEntity_ = entt::null;
+        cancelPanelDrag();              // 关面板时一并结束拖动，避免残留状态
+    }
     bool filterPanelActive() const { return filterPanelActive_; }
 
     /// 采矿场设置面板（右键矿机打开）：切换采集模式 / 选择矿种 / 旋转输出面
     void showMinerPanel(entt::entity e);
-    void hideMinerPanel() { minerPanelEntity_ = entt::null; }
+    void hideMinerPanel() {
+        minerPanelEntity_ = entt::null;
+        cancelPanelDrag();
+    }
     bool minerPanelActive() const { return minerPanelEntity_ != entt::null; }
 
     /// 重新计算布局（窗口缩放/最大化后调用，按钮与面板跟随窗口尺寸）
@@ -267,6 +279,42 @@ private:
     entt::entity filterPanelEntity_ = entt::null;
     sf::FloatRect filterPanelRect_{};
     std::array<sf::FloatRect, cfg::ITEM_COUNT> filterRects_{};
+    // 过滤面板的储物桶扩展：桶按"面"过滤，每个面一份白名单
+    int bucketFilterFace_ = 0;                         // 当前正在编辑的面（cfg::Dir 上右下左）
+    std::array<sf::FloatRect, 4> bucketFaceRects_{};    // 四个面选择按钮
+    /// 面编辑器里给储物桶用的「过滤设置」按钮矩形（非储物桶返回空矩形）
+    sf::FloatRect faceEditFilterBtnRect() const;
+
+    // ---- 面板通用拖动：按住面板顶部标题栏即可把整个面板挪到别处 ----
+    // 每个面板的可拖动区高度取自「它自己标题栏的绘制高度 + 2px 上边框」；
+    // 拖动时用同一位移同步平移面板内的所有子控件矩形（按钮/列表命中区），
+    // 所以拖完照样点得准，不会错位。多个面板同时打开时各自独立拖动、互不干扰。
+    struct DragPanel {
+        sf::FloatRect* rect = nullptr;          // 面板主矩形（拖动只改它的 left/top）
+        float headH = 0.0f;                     // 可拖动区高度（该面板标题栏 + 上边框）
+        std::vector<sf::FloatRect*> children;   // 需要跟着平移的子矩形
+    };
+    // 各面板可拖动区高度 = 该面板标题栏的绘制高度 + 2px 上边框
+    static constexpr float ME_PANEL_HEAD_H = 34.0f;      // drawMePanel     : head 32
+    static constexpr float FILTER_PANEL_HEAD_H = 34.0f;  // drawFilterPanel : head 32
+    static constexpr float MINER_PANEL_HEAD_H = 42.0f;   // drawMinerPanel  : head 40
+    static constexpr float CRAFT_PANEL_HEAD_H = 36.0f;   // drawWorkbench   : head 34
+    bool panelDragging_ = false;                     // 是否正在拖动某个面板
+    sf::FloatRect* dragPanelRect_ = nullptr;         // 正在拖动的面板矩形
+    sf::Vector2f dragPanelOffset_{};                 // 按下点相对面板左上角的偏移
+    std::vector<sf::FloatRect*> dragPanelChildren_;  // 正在拖动的面板的子矩形
+    /// 收集当前打开的可拖面板（过滤 / 通物 / 采矿场 / 随身工作台）
+    void collectDragPanels(std::vector<DragPanel>& out);
+    /// 鼠标左键按下时尝试开始拖动；返回 true 表示这次按下被某个标题栏吃掉（不派发给控件）
+    bool tryStartPanelDrag(sf::Vector2f pos);
+    /// 拖动过程中的位置更新；released = true 表示松开左键，结束拖动
+    void updatePanelDrag(sf::Vector2f pos, bool released);
+    /// 结束拖动并清空状态（关面板 / ESC / 失焦时调用，防止状态残留）
+    void cancelPanelDrag() {
+        panelDragging_ = false;
+        dragPanelRect_ = nullptr;
+        dragPanelChildren_.clear();
+    }
 
     // 采矿场设置面板（右键矿机：模式切换 / 矿种选择 / 旋转输出面）
     //   非 entt::null 即打开；布局在 layoutMinerPanel() 中按面板矩形计算

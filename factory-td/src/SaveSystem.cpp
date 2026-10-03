@@ -286,6 +286,14 @@ bool saveGameToFile(Game& g, const std::string& path) {
                     bj["items"] = json::array();
                     for (auto t : bucket.items) bj["items"].push_back(ItemSystem::key(t));
                     bj["output_timer"] = bucket.outputTimer;
+                    // 每个输出面的过滤白名单（==空数组 = 该面不过滤）
+                    bj["face_filter"] = json::array();
+                    for (int d = 0; d < 4; ++d) {
+                        json fl = json::array();
+                        for (auto t : bucket.faceFilter[static_cast<size_t>(d)])
+                            fl.push_back(ItemSystem::key(t));
+                        bj["face_filter"].push_back(fl);
+                    }
                     break;
                 }
                 case cfg::BuildingType::Capacitor:
@@ -467,6 +475,13 @@ bool loadGameFromFile(Game& g, const std::string& path) {
                         if (auto t = ItemSystem::parse(ik.get<std::string>()))
                             bucket.items.push_back(*t);
                     bucket.outputTimer = bj.value("output_timer", 0.0f);
+                    // 过滤白名单；旧存档没有这个键 → 保持空 = 不过滤，行为与旧版一致
+                    const auto ff = bj.value("face_filter", json::array());
+                    for (int d = 0; d < 4 && d < static_cast<int>(ff.size()); ++d) {
+                        for (const auto& ik : ff[static_cast<size_t>(d)])
+                            if (auto t = ItemSystem::parse(ik.get<std::string>()))
+                                bucket.faceFilter[static_cast<size_t>(d)].push_back(*t);
+                    }
                     break;
                 }
                 case cfg::BuildingType::Capacitor:
